@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Chat Software Console</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <aside class="panel side-panel">
+        <div class="brand">
+          <p class="eyebrow">FastAPI console</p>
+          <h1>Chat Software</h1>
+        </div>
+
+        <section class="control-group">
+          <label for="api-base">API base</label>
+          <input id="api-base" name="api-base" autocomplete="off" />
+        </section>
+
+        <section class="control-group">
+          <label for="approve-root-path">Approve file root</label>
+          <div class="inline-controls">
+            <input id="approve-root-path" name="approve-root-path" autocomplete="off" placeholder="/Users/name/project" />
+            <button id="approve-root" type="button">Approve</button>
+          </div>
+          <label for="approved-roots">Approved roots</label>
+          <select id="approved-roots" name="approved-roots" size="4" multiple></select>
+          <button id="remove-root" class="secondary" type="button">Remove Root</button>
+        </section>
+
+        <section class="control-grid" aria-label="Server checks">
+          <button id="check-health" type="button">Check</button>
+          <button id="load-providers" type="button">Models</button>
+        </section>
+
+        <section class="control-group">
+          <label for="provider-select">Provider</label>
+          <select id="provider-select" name="provider-select">
+            <option value="ollama">Ollama</option>
+            <option value="openai">OpenAI</option>
+            <option value="anthropic">Claude</option>
+          </select>
+          <label for="model-input">Model</label>
+          <select id="model-input" name="model-input" aria-describedby="provider-note">
+            <option value="">Loading models...</option>
+          </select>
+          <p id="provider-note" class="note">Loading provider options...</p>
+        </section>
+
+        <section class="control-group">
+          <label for="ollama-installed">Ollama installed</label>
+          <select id="ollama-installed" name="ollama-installed"></select>
+          <div class="control-grid">
+            <button id="refresh-ollama" type="button">Refresh</button>
+            <button id="delete-ollama" class="danger" type="button">Delete</button>
+          </div>
+          <label for="ollama-install">Install Ollama model</label>
+          <div class="inline-controls">
+            <input id="ollama-install" name="ollama-install" autocomplete="off" list="ollama-catalog" placeholder="qwen3:8b" />
+            <button id="pull-ollama" type="button">Install</button>
+          </div>
+          <datalist id="ollama-catalog"></datalist>
+        </section>
+
+        <section class="readout" aria-live="polite">
+          <div class="readout-row">
+            <span>Health</span>
+            <strong id="health-state">Not checked</strong>
+          </div>
+          <div class="readout-row">
+            <span>Provider</span>
+            <strong id="provider-state">Unknown</strong>
+          </div>
+          <div class="readout-row">
+            <span>Model</span>
+            <strong id="model-state">Unknown</strong>
+          </div>
+          <div class="readout-row">
+            <span>Mode</span>
+            <strong id="mode-state">Unknown</strong>
+          </div>
+        </section>
+
+        <section class="control-group">
+          <label for="session-id">Session</label>
+          <div class="inline-controls">
+            <input id="session-id" name="session-id" autocomplete="off" />
+            <button id="load-session" type="button">Load</button>
+          </div>
+          <button id="new-session" class="secondary" type="button">New Session</button>
+        </section>
+      </aside>
+
+      <section class="panel work-panel">
+        <header class="toolbar">
+          <div>
+            <p class="eyebrow">Local file agent</p>
+            <h2>Conversation</h2>
+          </div>
+          <span id="request-state" class="pill">Idle</span>
+        </header>
+
+        <section id="messages" class="messages" aria-live="polite"></section>
+
+        <form id="chat-form" class="composer">
+          <label for="root-path">Approved root</label>
+          <input id="root-path" name="root-path" autocomplete="off" placeholder="Selected approved roots are used automatically" />
+          <label for="message">Message</label>
+          <div class="composer-row">
+            <textarea id="message" name="message" rows="4" required></textarea>
+            <button id="send" type="submit">Send</button>
+          </div>
+        </form>
+      </section>
+
+      <aside class="panel details-panel">
+        <header class="toolbar compact">
+          <div>
+            <p class="eyebrow">API output</p>
+            <h2>File Tools</h2>
+          </div>
+          <button id="clear-log" class="secondary" type="button">Clear</button>
+        </header>
+        <section class="command-console-panel" aria-label="Agent command console">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Agent runtime</p>
+              <h3>Command History</h3>
+            </div>
+            <button id="clear-command-console" class="secondary compact-button" type="button">Clear</button>
+          </div>
+          <section id="command-console" class="command-console" aria-live="polite"></section>
+        </section>
+        <section class="organize-panel" aria-label="Organize preview">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Safe file management</p>
+              <h3>Organize Preview</h3>
+            </div>
+            <span id="organize-state" class="pill">No plan</span>
+          </div>
+          <label for="organize-strategy">Strategy</label>
+          <select id="organize-strategy" name="organize-strategy">
+            <option value="by_type">By type</option>
+            <option value="by_date">By date</option>
+            <option value="by_filename">By filename</option>
+            <option value="by_topic">By topic</option>
+          </select>
+          <label for="organize-filter">File filter</label>
+          <select id="organize-filter" name="organize-filter">
+            <option value="all">All files</option>
+            <option value="image">Images</option>
+            <option value="video">Videos</option>
+            <option value="audio">Audio</option>
+            <option value="document">Documents</option>
+          </select>
+          <label for="organize-path">Path</label>
+          <input id="organize-path" name="organize-path" autocomplete="off" value="." />
+          <label for="organize-max-files">Max files</label>
+          <input id="organize-max-files" name="organize-max-files" type="number" min="1" max="5000" value="1000" />
+          <div class="organize-actions">
+            <button id="organize-plan" type="button">Preview</button>
+            <button id="organize-apply" class="secondary" type="button" disabled>Apply</button>
+            <button id="organize-undo" class="secondary" type="button" disabled>Undo</button>
+          </div>
+          <section id="organize-preview" class="organize-preview" aria-live="polite"></section>
+        </section>
+        <section class="command-panel">
+          <label for="command-select">Command</label>
+          <select id="command-select" name="command-select">
+            <option value="list">List directory</option>
+            <option value="stat">Stat path</option>
+            <option value="read">Read file</option>
+            <option value="mkdir">Create folder</option>
+            <option value="write">Create file</option>
+            <option value="copy">Copy path</option>
+            <option value="move">Move path</option>
+            <option value="edit">Edit file</option>
+            <option value="glob">Glob files</option>
+            <option value="grep">Search text</option>
+            <option value="git_status">Git status</option>
+            <option value="git_diff">Git diff</option>
+          </select>
+          <label for="command-path">Path / source / repo</label>
+          <input id="command-path" name="command-path" autocomplete="off" value="." />
+          <label for="command-target">Destination</label>
+          <input id="command-target" name="command-target" autocomplete="off" placeholder="Folder/file target" />
+          <label for="command-pattern">Pattern</label>
+          <input id="command-pattern" name="command-pattern" autocomplete="off" placeholder="*.py" />
+          <label for="command-query">Search / find text</label>
+          <input id="command-query" name="command-query" autocomplete="off" placeholder="Acme" />
+          <label for="command-include">Include glob</label>
+          <input id="command-include" name="command-include" autocomplete="off" value="*" />
+          <label for="command-content">Content / replacement</label>
+          <textarea id="command-content" name="command-content" rows="3"></textarea>
+          <label class="checkbox-row" for="command-overwrite">
+            <input id="command-overwrite" name="command-overwrite" type="checkbox" />
+            <span>Overwrite file</span>
+          </label>
+          <button id="run-command" type="button">Run</button>
+        </section>
+        <section id="tool-calls" class="tool-calls"></section>
+        <pre id="raw-output" class="raw-output"></pre>
+      </aside>
+    </main>
+
+    <script src="/static/app.js" defer></script>
+  </body>
+</html>

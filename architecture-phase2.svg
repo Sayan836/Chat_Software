@@ -1,0 +1,141 @@
+<svg viewBox="0 0 1000 900" xmlns="http://www.w3.org/2000/svg" role="img" font-family="ui-sans-serif, system-ui, sans-serif">
+  <title>Chat Software final architecture and the organize-a-folder workflow</title>
+  <desc>Layered architecture from the desktop UI down through the FastAPI API, the agent, the new Phase 2 organize subsystem, the tools layer, and the provider and storage layers. A numbered flow shows how an "organize my folder" prompt becomes a previewed, approved, reversible reorganization, with security gates marked at the approval, scope, egress, and delete points.</desc>
+
+  <style>
+    .lbl   { fill:#57606a; font-size: 12px; font-weight: 700; letter-spacing:.04em; text-transform:uppercase; }
+    .box   { fill:#f3f4f6; stroke:#d0d7de; stroke-width:1.2; }
+    .new   { fill:#d7f2ec; stroke:#0d9488; stroke-width:1.4; }
+    .cont  { fill:none; stroke:#d0d7de; stroke-width:1; stroke-dasharray:2 4; }
+    .t     { fill:#1f2328; font-size: 13px; font-weight:650; }
+    .ts    { fill:#57606a; font-size: 10.5px; }
+    .tw    { fill:#fff; font-size:11px; font-weight:700; }
+    .chip  { fill:#f3f4f6; stroke:#d0d7de; stroke-width:1; }
+    .chipn { fill:#d7f2ec; stroke:#0d9488; stroke-width:1.2; }
+    .flow  { stroke:#0d9488; stroke-width:2.2; fill:none; }
+    .wire  { stroke:#8a929c; stroke-width:1.3; fill:none; }
+    .gate  { fill:none; stroke:#b45309; stroke-width:1.6; stroke-dasharray:4 3; }
+    .gtxt  { fill:#b45309; font-size:10px; font-weight:700; }
+    .num   { fill:#0d9488; }
+  </style>
+
+  <defs>
+    <marker id="ah" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 Z" fill="#8a929c"/></marker>
+    <marker id="af" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 Z" fill="#0d9488"/></marker>
+  </defs>
+
+  <!-- BAND 1: UI -->
+  <text class="lbl" x="24" y="52">Desktop UI</text>
+  <rect class="box" x="150" y="34" width="360" height="60" rx="8"/>
+  <text class="t"  x="170" y="60">Chat &amp; Command Panel</text>
+  <text class="ts" x="170" y="78">prompt · run file/git commands</text>
+  <rect class="box" x="540" y="34" width="410" height="60" rx="8"/>
+  <text class="t"  x="560" y="60">Plan Preview → Approve / Undo</text>
+  <text class="ts" x="560" y="78">renders Plan JSON as a diff</text>
+  <rect class="gate" x="540" y="28" width="410" height="72" rx="10"/>
+  <text class="gtxt" x="770" y="24">shield: human approval gate</text>
+
+  <!-- BAND 2: API -->
+  <text class="lbl" x="24" y="150">API · FastAPI</text>
+  <rect class="cont" x="150" y="126" width="800" height="70" rx="8"/>
+  <text class="ts" x="160" y="120">main.py serves UI + mounts server.py</text>
+  <rect class="chip"  x="164" y="140" width="120" height="42" rx="6"/><text class="t" x="224" y="166" text-anchor="middle">/chat</text>
+  <rect class="chip"  x="292" y="140" width="140" height="42" rx="6"/><text class="ts" x="362" y="160" text-anchor="middle">/roots/approve</text><text class="ts" x="362" y="174" text-anchor="middle">/health · /providers</text>
+  <rect class="chip"  x="440" y="140" width="180" height="42" rx="6"/><text class="ts" x="530" y="160" text-anchor="middle">/files/* · /commands/git/*</text><text class="ts" x="530" y="174" text-anchor="middle">read-only</text>
+  <rect class="chipn" x="628" y="140" width="196" height="42" rx="6"/><text class="t" x="726" y="160" text-anchor="middle">/organize/plan·apply·undo</text><text class="ts" x="726" y="174" text-anchor="middle">NEW · Phase 2</text>
+  <rect class="chip"  x="832" y="140" width="104" height="42" rx="6"/><text class="ts" x="884" y="166" text-anchor="middle">/ollama/*</text>
+
+  <!-- BAND 3: AGENT -->
+  <text class="lbl" x="24" y="252">Agent</text>
+  <rect class="box" x="150" y="228" width="300" height="60" rx="8"/>
+  <text class="t"  x="170" y="254">Intent Router</text>
+  <text class="ts" x="170" y="272">read · git · organize · chat</text>
+  <rect class="box" x="650" y="228" width="300" height="60" rx="8"/>
+  <text class="t"  x="670" y="254">Session Store</text>
+  <text class="ts" x="670" y="272">conversation history</text>
+
+  <!-- BAND 4: ORGANIZE (NEW) -->
+  <text class="lbl" x="24" y="360">Organize · NEW</text>
+  <rect class="new" x="150" y="330" width="800" height="86" rx="10" fill-opacity="0.5"/>
+  <rect class="chipn" x="168" y="348" width="220" height="52" rx="7"/>
+  <text class="t"  x="278" y="370" text-anchor="middle">Planner</text>
+  <text class="ts" x="278" y="386" text-anchor="middle">rules: by_type/by_date</text>
+  <text class="ts" x="278" y="399" text-anchor="middle">LLM: by_topic</text>
+  <rect class="chipn" x="410" y="348" width="170" height="52" rx="7"/>
+  <text class="t"  x="495" y="372" text-anchor="middle">Plan JSON</text>
+  <text class="ts" x="495" y="390" text-anchor="middle">mkdir · move · reason</text>
+  <rect class="chipn" x="602" y="348" width="230" height="52" rx="7"/>
+  <text class="t"  x="717" y="370" text-anchor="middle">Executor</text>
+  <text class="ts" x="717" y="386" text-anchor="middle">deterministic · no LLM</text>
+  <text class="ts" x="717" y="399" text-anchor="middle">+ writes undo journal</text>
+
+  <!-- BAND 5: TOOLS -->
+  <text class="lbl" x="24" y="470">Tools</text>
+  <rect class="box"  x="150" y="448" width="180" height="64" rx="8"/>
+  <text class="t"  x="240" y="474" text-anchor="middle">read-only file_ops</text>
+  <text class="ts" x="240" y="492" text-anchor="middle">list·stat·read·glob·grep</text>
+  <rect class="new"  x="342" y="448" width="250" height="64" rx="8"/>
+  <text class="t"  x="467" y="472" text-anchor="middle">Write layer  (NEW)</text>
+  <text class="ts" x="467" y="489" text-anchor="middle">safe_move (rename→EXDEV)</text>
+  <text class="ts" x="467" y="502" text-anchor="middle">quarantine · send2trash</text>
+  <rect class="box"  x="604" y="448" width="120" height="64" rx="8"/>
+  <text class="t"  x="664" y="478" text-anchor="middle">git tools</text>
+  <text class="ts" x="664" y="494" text-anchor="middle">status · diff</text>
+  <rect class="box"  x="736" y="448" width="214" height="64" rx="8"/>
+  <text class="t"  x="843" y="472" text-anchor="middle">Scope resolver</text>
+  <text class="ts" x="843" y="489" text-anchor="middle">+ approved-roots store</text>
+  <text class="ts" x="843" y="502" text-anchor="middle">src &amp; dst checked</text>
+  <rect class="gate" x="342" y="442" width="608" height="76" rx="10"/>
+  <text class="gtxt" x="470" y="438">shield: scope check · no-erase guarantee (no os.remove / rmtree)</text>
+
+  <!-- BAND 6: PROVIDER + STORAGE -->
+  <text class="lbl" x="24" y="592">Provider</text>
+  <rect class="box" x="150" y="568" width="150" height="64" rx="8"/>
+  <text class="t"  x="225" y="596" text-anchor="middle">LiteLLM factory</text>
+  <text class="ts" x="225" y="612" text-anchor="middle">provider router</text>
+  <rect class="box" x="312" y="568" width="170" height="64" rx="8"/>
+  <text class="t"  x="397" y="592" text-anchor="middle">Ollama</text>
+  <text class="ts" x="397" y="609" text-anchor="middle">local · default</text>
+  <text class="ts" x="397" y="622" text-anchor="middle">no egress</text>
+  <rect class="box" x="494" y="568" width="196" height="64" rx="8"/>
+  <text class="t"  x="592" y="592" text-anchor="middle">OpenAI / Anthropic</text>
+  <text class="ts" x="592" y="609" text-anchor="middle">cloud · opt-in key</text>
+  <text class="ts" x="592" y="622" text-anchor="middle">metadata + consent</text>
+  <rect class="gate" x="494" y="562" width="196" height="76" rx="10"/>
+  <text class="gtxt" x="592" y="558" text-anchor="middle">shield: egress allowlist</text>
+  <text class="lbl" x="740" y="556">Storage</text>
+  <rect class="box" x="712" y="568" width="238" height="64" rx="8"/>
+  <text class="t"  x="831" y="590" text-anchor="middle">SQLite  ·  Quarantine dir</text>
+  <text class="ts" x="831" y="607" text-anchor="middle">sessions · undo journal</text>
+  <text class="ts" x="831" y="622" text-anchor="middle">audit · approved roots</text>
+
+  <!-- STRUCTURAL WIRES -->
+  <path class="wire" d="M330,94 L330,126" marker-end="url(#ah)"/>
+  <path class="wire" d="M726,196 L726,228 L300,228" marker-end="url(#ah)"/>
+  <path class="wire" d="M467,512 L467,568 L300,568" marker-end="url(#ah)"/>
+  <path class="wire" d="M843,512 L843,540"/>
+  <path class="wire" d="M717,416 L717,448" marker-end="url(#ah)"/>
+
+  <!-- NUMBERED ORGANIZE FLOW -->
+  <circle class="num" cx="330" cy="112" r="10"/><text class="tw" x="330" y="116" text-anchor="middle">1</text>
+  <path class="flow" d="M300,288 L278,330" marker-end="url(#af)"/>
+  <circle class="num" cx="289" cy="309" r="10"/><text class="tw" x="289" y="313" text-anchor="middle">2</text>
+  <path class="flow" d="M560,360 C640,300 690,150 745,94" marker-end="url(#af)"/>
+  <circle class="num" cx="690" cy="196" r="10"/><text class="tw" x="690" y="200" text-anchor="middle">3</text>
+  <path class="flow" d="M745,94 C790,220 760,300 720,346" marker-end="url(#af)"/>
+  <circle class="num" cx="792" cy="210" r="10"/><text class="tw" x="792" y="214" text-anchor="middle">4</text>
+  <path class="flow" d="M717,400 C640,430 520,430 467,446" marker-end="url(#af)"/>
+  <circle class="num" cx="560" cy="429" r="10"/><text class="tw" x="560" y="433" text-anchor="middle">5</text>
+  <path class="flow" d="M560,512 C640,545 740,552 800,566" marker-end="url(#af)"/>
+  <circle class="num" cx="690" cy="540" r="10"/><text class="tw" x="690" y="544" text-anchor="middle">6</text>
+
+  <!-- LEGEND -->
+  <text class="lbl" x="24" y="700">Legend</text>
+  <rect class="box" x="150" y="686" width="20" height="14" rx="3"/><text class="ts" x="178" y="697">Existing (Phase 0–1)</text>
+  <rect class="new" x="330" y="686" width="20" height="14" rx="3"/><text class="ts" x="358" y="697">New in Phase 2</text>
+  <rect class="gate" x="512" y="686" width="20" height="14" rx="3"/><text class="ts" x="540" y="697">Security gate</text>
+  <line x1="672" y1="693" x2="700" y2="693" class="flow"/><text class="ts" x="708" y="697">organize flow 1→6</text>
+  <text class="ts" x="150" y="726">1 prompt → /chat  ·  2 router → planner (reads dir, classifies)  ·  3 Plan JSON → preview</text>
+  <text class="ts" x="150" y="744">4 human approves → /organize/apply → executor  ·  5 safe_move via write layer  ·  6 undo journal + quarantine in SQLite</text>
+  <text class="ts" x="150" y="762">Undo replays the journal in reverse. In local mode nothing leaves the machine; cloud opt-in adds the egress gate.</text>
+</svg>

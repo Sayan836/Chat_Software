@@ -1,0 +1,29 @@
+{
+  "name": "chat-software-app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "serve": "PYTHONPATH=backend python3 main.py",
+    "backend": "PYTHONPATH=backend python3 -m chat_software.server",
+    "dev:backend": "cross-env CHAT_SOFTWARE_RELOAD=1 PYTHONPATH=backend python3 -m chat_software.server",
+    "dev:all": "concurrently -n backend,frontend -c blue,green \"npm:dev:backend\" \"npm:dev\"",
+    "test:backend": "PYTHONPATH=backend python3 -m unittest discover -s backend/tests",
+    "test:api": "PYTHONPATH=backend python3 -m pytest backend/tests/test_api_smoke.py -v",
+    "test:live": "PYTHONPATH=backend python3 -m pytest backend/tests/test_server_live.py -v",
+    "test": "PYTHONPATH=backend python3 -m pytest backend/tests -v",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.0.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0",
+    "concurrently": "^9.1.0",
+    "cross-env": "^7.0.3",
+    "typescript": "^5.5.0",
+    "vite": "^8.1.3"
+  }
+}

@@ -1,0 +1,35 @@
+
+# Study-only reference repos (snapshots, not shipped)
+reference/
+
+# App generated artifacts
+app/.venv/
+app/.chat_software_state/
+app/node_modules/
+app/dist/
+app/src-tauri/target/
+__pycache__/
+*.py[cod]
+
+# Secrets and local environment (never commit)
+.env
+.env.*
+!.env.example
+
+# OS / tooling noise
+.DS_Store
+.pytest_cache/
+*.egg-info/
+
+# Local SQLite state and journals
+*.sqlite3
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm
+
+# Model weights and local runtimes (AirLLM/Ollama artefacts stay outside Git)
+*.safetensors
+*.gguf
+*.bin
+app/integrations/airllm/.venv/
+app/integrations/airllm/upstream/
