@@ -151,7 +151,13 @@ class ReadOnlyAgent:
         offline_echo: bool = False,
         working_path: str | Path = ".",
         runtime_callback: Optional[Callable[[dict[str, object]], None]] = None,
+        knowledge: Optional[Any] = None,
+        knowledge_root_id: Optional[str] = None,
     ) -> None:
+        if knowledge_root_id and knowledge is None:
+            raise ValueError("Documents mode needs a knowledge connector.")
+        self.knowledge = knowledge
+        self.knowledge_root_id = knowledge_root_id or None
         self.roots = [str(Path(root).expanduser()) for root in roots] if roots is not None else []
         self.session_store = session_store
         self.safety_store = safety_store
@@ -161,10 +167,16 @@ class ReadOnlyAgent:
         self.runtime_callback = runtime_callback
         self._response_metadata: dict[str, object] = {}
         self._root_graph: Any | None = None
+        self._active_session: Optional[str] = None
+        self.system_addendum: str = ""
+        self._response_metadata_base: dict[str, object] = {}
+        self.tool_names: list[str] = []
+        self.tool_context: Optional[Any] = None
 
     def handle(self, message: str, session_id: Optional[str] = None) -> AgentResult:
         active_session = self.session_store.create_session(session_id)
-        self._response_metadata = {}
+        self._active_session = active_session
+        self._response_metadata = dict(self._response_metadata_base)
         self.session_store.append_message(active_session, "user", message)
 
         response, tool_calls = self._handle_with_graph(message, active_session)
@@ -188,7 +200,8 @@ class ReadOnlyAgent:
         session_id: Optional[str] = None,
     ) -> Iterator[dict[str, object]]:
         active_session = self.session_store.create_session(session_id)
-        self._response_metadata = {}
+        self._active_session = active_session
+        self._response_metadata = dict(self._response_metadata_base)
         self.session_store.append_message(active_session, "user", message)
 
         response, tool_calls = yield from self._handle_with_graph_stream(message, active_session)
@@ -356,20 +369,109 @@ class ReadOnlyAgent:
         return CHAT_FALLBACK_RESPONSE, []
 
     def _run_chat_agent(self, message: str) -> str:
-        return self.chat_client.complete(
-            [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a local-first file assistant. "
-                        "For questions about files, folders, repositories, or commands, "
-                        "do not guess. Ask the user to approve a root or use the available "
-                        "file tools. For ordinary conversation, answer normally."
-                    ),
-                },
-                {"role": "user", "content": message},
-            ]
+        system = (
+            "You are a local-first file assistant. "
+            "For questions about files, folders, repositories, or commands, "
+            "do not guess. Ask the user to approve a root or use the available "
+            "file tools. For ordinary conversation, answer normally."
         )
+        if self.system_addendum:
+            system += "\n\n" + self.system_addendum
+        messages = [
+            {"role": "system", "content": system},
+            *self._conversation_history(),
+            {"role": "user", "content": message},
+        ]
+        if not self.tool_names or self.tool_context is None:
+            return self.chat_client.complete(messages)
+        from chat_software.agent.toolbox import available_tools, run_tool_loop
+
+        ctx = self.tool_context
+        ctx.on_event = lambda event: self._emit_runtime({"source": "agent", **event})
+        tools = available_tools(self.tool_names, ctx)
+        result = run_tool_loop(self.chat_client, messages, tools, ctx)
+        self._response_metadata["tools_enabled"] = [tool.name for tool in tools]
+        self._response_metadata["tool_steps"] = [
+            {"tool": step["tool"], "args": step["args"], "status": step["status"]} for step in result.steps
+        ]
+        if ctx.sources:
+            self._response_metadata["sources"] = list(ctx.sources)
+        return result.text
+
+    def _conversation_history(
+        self,
+        max_messages: int = 20,
+        max_chars: int = 24_000,
+    ) -> list[dict[str, str]]:
+        """Earlier turns of this session (oldest first), excluding the message being answered."""
+
+        if not self._active_session:
+            return []
+        stored = self.session_store.recent_messages(self._active_session, limit=max_messages + 1)
+        if stored and stored[-1].role == "user":
+            stored = stored[:-1]  # the current message, appended before the graph runs
+        history: list[dict[str, str]] = []
+        used = 0
+        for item in reversed(stored):
+            if item.role not in {"user", "assistant"}:
+                continue
+            content = item.content
+            if item.role == "assistant" and "\nTools run:" in content:
+                content = content.split("\nTools run:", 1)[0].rstrip()
+            if used + len(content) > max_chars:
+                break
+            history.append({"role": item.role, "content": content})
+            used += len(content)
+        return list(reversed(history))
+
+    def _run_document_agent(self, message: str) -> tuple[str, list[ToolCallRecord]]:
+        from chat_software.agent.agents.document_agent import (
+            DEFAULT_TOP_K,
+            answer_from_documents,
+            format_response,
+        )
+
+        root_id = str(self.knowledge_root_id or "")
+        tool_id = str(uuid.uuid4())
+        self._emit_runtime(
+            {
+                "type": "tool_started",
+                "source": "agent",
+                "tool_id": tool_id,
+                "name": "knowledge_search",
+                "root_id": root_id,
+            }
+        )
+        answer = answer_from_documents(
+            self.knowledge,
+            self.chat_client,
+            root_id,
+            message,
+            top_k=DEFAULT_TOP_K,
+        )
+        metadata = answer.metadata()
+        metadata["provider"] = self.chat_client.settings.provider
+        metadata["model"] = self.chat_client.settings.model
+        self._response_metadata["documents"] = metadata
+        self._emit_runtime(
+            {
+                "type": "tool_completed",
+                "source": "agent",
+                "tool_id": tool_id,
+                "name": "knowledge_search",
+                "root_id": root_id,
+                "request_id": answer.request_id,
+                "refused": answer.refused,
+                "citations": len(answer.citations),
+            }
+        )
+        record = ToolCallRecord(
+            name="knowledge_search",
+            arguments={"root_id": root_id, "top_k": DEFAULT_TOP_K},
+            result=metadata,
+            command=f"knowledge_search(root_id={root_id!r}, request_id={answer.request_id!r})",
+        )
+        return format_response(answer), [record]
 
     def _tool_call(
         self,

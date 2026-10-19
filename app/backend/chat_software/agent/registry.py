@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from .deps import AgentDeps
-from .agents import build_chat_agent, build_file_ops_agent
+from .agents import build_chat_agent, build_document_agent, build_file_ops_agent
 from .routing import requires_scoped_tool
 
 
@@ -50,5 +50,19 @@ def register_default_agents() -> None:
                 build=build_file_ops_agent,
                 requires_roots=True,
                 writes=True,
+            )
+        )
+    if "documents" not in AGENTS:
+        register(
+            AgentSpec(
+                name="documents",
+                description=(
+                    "Cited answers from a bound retrieval workspace. Selected explicitly by the "
+                    "user's Documents mode, never inferred from message wording."
+                ),
+                matches=lambda _message: False,
+                build=build_document_agent,
+                requires_roots=True,
+                writes=False,
             )
         )

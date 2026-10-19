@@ -7,11 +7,24 @@ from pathlib import Path
 from typing import Optional
 
 from chat_software.agent import ReadOnlyAgent, SessionStore
+from chat_software.knowledge import (
+    DEFAULT_CREDENTIAL_REF,
+    DEFAULT_INGEST_CREDENTIAL_REF,
+    IngestionService,
+    SubmissionStateError,
+    KnowledgeConnector,
+    KnowledgeError,
+    KnowledgeForbidden,
+    KnowledgeNotConfigured,
+    KnowledgeNotFound,
+    KnowledgeUnauthorized,
+)
 from chat_software.organize import apply_organize_plan, build_organize_plan, undo_organize_plan
 from chat_software.paths import state_dir
 from chat_software.provider.config import MODEL_REGISTRY, ProviderSettings, get_provider_settings
 from chat_software.provider.factory import get_chat_client
 from chat_software.provider import ollama
+from chat_software import secrets_store
 from chat_software.runtime_log import record_runtime_event
 from chat_software.safety_store import ApprovedRoot, SafetyStore
 from chat_software.tools.file_ops import glob_files, grep_files, list_dir, read_file, stat_path
@@ -60,13 +73,13 @@ def model_error_detail(settings: ProviderSettings, error: Exception) -> str:
             f"Original error: {original}"
         )
     if settings.provider == "openai":
-        key_state = "set" if os.getenv("OPENAI_API_KEY") else "not set"
+        key_state = "set" if secrets_store.get("OPENAI_API_KEY") else "not set"
         return (
             f"Model call failed for OpenAI model {settings.model!r}. "
             f"OPENAI_API_KEY is {key_state}. Original error: {original}"
         )
     if settings.provider == "anthropic":
-        key_state = "set" if os.getenv("ANTHROPIC_API_KEY") else "not set"
+        key_state = "set" if secrets_store.get("ANTHROPIC_API_KEY") else "not set"
         return (
             f"Model call failed for Claude model {settings.model!r}. "
             f"ANTHROPIC_API_KEY is {key_state}. Original error: {original}"
@@ -90,6 +103,15 @@ def create_app() -> object:
         working_path: str = "."
         provider: Optional[str] = None
         model: Optional[str] = None
+        knowledge_root_id: Optional[str] = Field(
+            default=None,
+            description="Documents mode: answer from this root's bound retrieval workspace.",
+        )
+        skill_ids: list[str] = Field(default_factory=list, max_length=8)
+        tools: list[str] = Field(
+            default_factory=list,
+            description="Tools to allow for this turn (web_search, fetch_url, run_code).",
+        )
 
     class RootApprovalRequest(BaseModel):
         path: str = Field(min_length=1)
@@ -170,16 +192,93 @@ def create_app() -> object:
     class OrganizePlanIdRequest(BaseModel):
         plan_id: str = Field(min_length=1)
 
+    class KnowledgeBindRequest(BaseModel):
+        root_id: str = Field(min_length=1)
+        workspace_id: str = Field(min_length=1, max_length=36)
+        credential_ref: str = Field(default=DEFAULT_CREDENTIAL_REF, max_length=120)
+
+    class IngestEnableRequest(BaseModel):
+        root_id: str = Field(min_length=1)
+        credential_ref: str = Field(default=DEFAULT_INGEST_CREDENTIAL_REF, max_length=120)
+
+    class IngestPreviewRequest(BaseModel):
+        root_id: str = Field(min_length=1)
+        paths: list[str] = Field(min_length=1, max_length=50)
+
+    class KnowledgeSearchRequest(BaseModel):
+        root_id: str = Field(min_length=1)
+        query: str = Field(min_length=1, max_length=16000)
+        top_k: int = Field(default=5, ge=1, le=30)
+
+    class KnowledgeSourceRequest(BaseModel):
+        root_id: str = Field(min_length=1)
+        document_id: str = Field(min_length=1, max_length=128)
+        page: int = Field(default=1, ge=1, le=10000)
+
     app = FastAPI(title="Chat Software Agent Service", version="0.1.0")
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cors_origins(),
-        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["*"],
         allow_credentials=False,
     )
     store = session_store()
     safety = safety_store()
+    knowledge = KnowledgeConnector(safety)
+    app.state.knowledge = knowledge
+    ingestion = IngestionService(safety)
+    app.state.ingestion = ingestion
+
+    from chat_software.api import models as models_api
+
+    models_router = models_api.build_router()
+    app.state.pulls = models_router.pull_manager
+    app.include_router(models_router)
+
+    from chat_software.api import sessions as sessions_api
+
+    app.include_router(sessions_api.build_router(store))
+
+    from chat_software.api import skills as skills_api
+    from chat_software.skills import SkillLibrary, skills_system_prompt
+
+    skill_library = SkillLibrary()
+    app.state.skills = skill_library
+
+    def make_chat_client(provider: Optional[str] = None, requested_model: Optional[str] = None):
+        return get_chat_client(
+            provider=provider,
+            requested_model=requested_model,
+            offline_echo=_truthy(os.getenv("CHAT_SOFTWARE_OFFLINE_ECHO")),
+        )
+
+    app.state.make_chat_client = make_chat_client
+    app.include_router(skills_api.build_router(skill_library, make_chat_client))
+
+    from chat_software.api import sandbox as sandbox_api
+    from chat_software.sandbox import Sandbox
+
+    sandbox = Sandbox()
+    app.state.sandbox = sandbox
+    app.include_router(sandbox_api.build_router(sandbox, safety))
+
+    from chat_software.api import research as research_api
+
+    app.include_router(research_api.build_router(store, make_chat_client, knowledge, safety))
+
+    from chat_software.api import teams as teams_api
+    from chat_software.teams import TeamStore
+    from chat_software.teams.runtime import TeamDeps
+
+    team_store = TeamStore(_state_db_path("teams.sqlite3"))
+    app.state.teams = team_store
+    app.include_router(teams_api.build_router(
+        team_store,
+        store,
+        TeamDeps(client_factory=make_chat_client, skills=skill_library, sandbox=sandbox, knowledge=knowledge),
+        safety,
+    ))
 
     def root_payload(root: ApprovedRoot) -> dict[str, object]:
         return {
@@ -337,6 +436,7 @@ def create_app() -> object:
                 "model": settings.model,
                 "session_id": request.session_id,
                 "message": request.message,
+                "mode": "documents" if request.knowledge_root_id else "chat",
             },
             sink,
         )
@@ -353,7 +453,10 @@ def create_app() -> object:
             offline_echo=_truthy(os.getenv("CHAT_SOFTWARE_OFFLINE_ECHO")),
             working_path=request.working_path,
             runtime_callback=agent_runtime,
+            knowledge=knowledge,
+            knowledge_root_id=request.knowledge_root_id,
         )
+        apply_skills(agent, request)
         result = agent.handle(message=request.message, session_id=request.session_id)
         data = chat_response_payload(result, settings)
         emit_runtime(
@@ -384,6 +487,7 @@ def create_app() -> object:
                 "model": settings.model,
                 "session_id": request.session_id,
                 "message": request.message,
+                "mode": "documents" if request.knowledge_root_id else "chat",
             }
         )
         yield started
@@ -400,7 +504,10 @@ def create_app() -> object:
             offline_echo=_truthy(os.getenv("CHAT_SOFTWARE_OFFLINE_ECHO")),
             working_path=request.working_path,
             runtime_callback=None,
+            knowledge=knowledge,
+            knowledge_root_id=request.knowledge_root_id,
         )
+        apply_skills(agent, request)
         for event in agent.handle_stream(message=request.message, session_id=request.session_id):
             if event.get("type") == "__agent_result":
                 result = event["result"]
@@ -426,6 +533,9 @@ def create_app() -> object:
     ) -> tuple[int, dict[str, object]]:
         if isinstance(exc, (FileNotFoundError, NotADirectoryError, PermissionError, ValueError)):
             status_code = 400
+            detail = str(exc)
+        elif isinstance(exc, KnowledgeError):
+            status_code = knowledge_http_error(exc).status_code
             detail = str(exc)
         else:
             status_code = 502
@@ -496,6 +606,119 @@ def create_app() -> object:
     @app.get("/roots")
     def approved_roots() -> dict[str, object]:
         return {"roots": [root_payload(root) for root in safety.list_approved_roots()]}
+
+    @app.post("/roots/{root_id}/revoke")
+    def revoke_root(root_id: str) -> dict[str, object]:
+        try:
+            root = safety.revoke_root(root_id)
+        except PermissionError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"revoked": True, **root_payload(root)}
+
+    def knowledge_http_error(exc: Exception) -> HTTPException:
+        if isinstance(exc, (PermissionError, KnowledgeForbidden)):
+            return HTTPException(status_code=403, detail=str(exc))
+        if isinstance(exc, (KnowledgeNotFound, KeyError)):
+            return HTTPException(status_code=404, detail=str(exc).strip("'\""))
+        if isinstance(exc, KnowledgeNotConfigured):
+            return HTTPException(status_code=503, detail=str(exc))
+        if isinstance(exc, KnowledgeUnauthorized):
+            return HTTPException(
+                status_code=502,
+                detail="The retrieval backend rejected this app's API key. Check the sidecar configuration.",
+            )
+        if isinstance(exc, KnowledgeError):
+            status = exc.status if exc.status in {413, 415, 422} else 503
+            return HTTPException(status_code=status, detail=str(exc))
+        if isinstance(exc, SubmissionStateError):
+            return HTTPException(status_code=409, detail=str(exc))
+        if isinstance(exc, ValueError):
+            return HTTPException(status_code=400, detail=str(exc))
+        return HTTPException(status_code=500, detail=f"Knowledge request failed: {exc.__class__.__name__}")
+
+    @app.get("/knowledge/status")
+    def knowledge_status() -> dict[str, object]:
+        return knowledge.status()
+
+    @app.get("/knowledge/bindings")
+    def knowledge_bindings() -> dict[str, object]:
+        return {"bindings": knowledge.bindings()}
+
+    @app.post("/knowledge/bindings")
+    def knowledge_bind(request: KnowledgeBindRequest) -> dict[str, object]:
+        try:
+            binding = knowledge.bind(request.root_id, request.workspace_id, request.credential_ref)
+            return {"bound": True, **binding}
+        except Exception as exc:
+            raise knowledge_http_error(exc) from exc
+
+    @app.delete("/knowledge/bindings/{root_id}")
+    def knowledge_unbind(root_id: str) -> dict[str, object]:
+        try:
+            knowledge.unbind(root_id)
+        except Exception as exc:
+            raise knowledge_http_error(exc) from exc
+        return {"unbound": True, "root_id": root_id}
+
+    @app.post("/knowledge/ingest/enable")
+    def knowledge_ingest_enable(request: IngestEnableRequest) -> dict[str, object]:
+        try:
+            return {"enabled": True, **ingestion.enable(request.root_id, request.credential_ref)}
+        except Exception as exc:
+            raise knowledge_http_error(exc) from exc
+
+    @app.delete("/knowledge/ingest/enable/{root_id}")
+    def knowledge_ingest_disable(root_id: str) -> dict[str, object]:
+        try:
+            ingestion.disable(root_id)
+        except Exception as exc:
+            raise knowledge_http_error(exc) from exc
+        return {"enabled": False, "root_id": root_id}
+
+    @app.post("/knowledge/ingest/preview")
+    def knowledge_ingest_preview(request: IngestPreviewRequest) -> dict[str, object]:
+        try:
+            return ingestion.preview(request.root_id, request.paths)
+        except Exception as exc:
+            raise knowledge_http_error(exc) from exc
+
+    @app.post("/knowledge/ingest/{submission_id}/approve")
+    def knowledge_ingest_approve(submission_id: str) -> dict[str, object]:
+        try:
+            return ingestion.approve(submission_id)
+        except Exception as exc:
+            raise knowledge_http_error(exc) from exc
+
+    @app.get("/knowledge/ingest/{submission_id}")
+    def knowledge_ingest_status(submission_id: str) -> dict[str, object]:
+        try:
+            return ingestion.refresh(submission_id)
+        except Exception as exc:
+            raise knowledge_http_error(exc) from exc
+
+    @app.delete("/knowledge/ingest/{submission_id}")
+    def knowledge_ingest_discard(submission_id: str) -> dict[str, object]:
+        try:
+            ingestion.discard(submission_id)
+        except Exception as exc:
+            raise knowledge_http_error(exc) from exc
+        return {"discarded": True, "submission_id": submission_id}
+
+    @app.post("/knowledge/search")
+    def knowledge_search(request: KnowledgeSearchRequest) -> dict[str, object]:
+        try:
+            result = knowledge.search(request.root_id, request.query, top_k=request.top_k)
+        except Exception as exc:
+            raise knowledge_http_error(exc) from exc
+        return {"root_id": request.root_id, **result.to_dict()}
+
+    @app.post("/knowledge/source")
+    def knowledge_source(request: KnowledgeSourceRequest) -> dict[str, object]:
+        try:
+            page = knowledge.open_source(request.root_id, request.document_id, request.page)
+        except Exception as exc:
+            raise knowledge_http_error(exc) from exc
+        return {"root_id": request.root_id, **page.to_dict()}
 
     @app.post("/files/list")
     def files_list(request: ListDirRequest) -> dict[str, object]:
@@ -816,16 +1039,23 @@ def create_app() -> object:
                 {
                     "provider": "openai",
                     "label": "OpenAI",
-                    "api_available": bool(os.getenv("OPENAI_API_KEY")),
-                    "base_url": os.getenv("OPENAI_BASE_URL"),
+                    "api_available": bool(secrets_store.get("OPENAI_API_KEY")),
+                    "base_url": secrets_store.get("OPENAI_BASE_URL"),
                     "default_model": get_provider_settings(provider="openai").model,
                 },
                 {
                     "provider": "anthropic",
                     "label": "Claude",
-                    "api_available": bool(os.getenv("ANTHROPIC_API_KEY")),
-                    "base_url": os.getenv("ANTHROPIC_BASE_URL"),
+                    "api_available": bool(secrets_store.get("ANTHROPIC_API_KEY")),
+                    "base_url": secrets_store.get("ANTHROPIC_BASE_URL"),
                     "default_model": get_provider_settings(provider="anthropic").model,
+                },
+                {
+                    "provider": "compatible",
+                    "label": "OpenAI-compatible",
+                    "api_available": bool(secrets_store.get("COMPATIBLE_BASE_URL")),
+                    "base_url": secrets_store.get("COMPATIBLE_BASE_URL"),
+                    "default_model": get_provider_settings(provider="compatible").model,
                 },
             ],
             "registered_models": [
@@ -861,6 +1091,34 @@ def create_app() -> object:
         except Exception as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
+    def apply_skills(agent: ReadOnlyAgent, request: ChatRequest) -> None:
+        from chat_software.agent.toolbox import ToolContext
+
+        selected = skill_library.resolve(request.skill_ids) if request.skill_ids else []
+        tool_names = [t for t in request.tools if t in {"web_search", "fetch_url", "run_code"}]
+        for skill in selected:
+            tool_names += [t for t in skill.tools if t != "search_documents"]
+        if selected:
+            agent.system_addendum = skills_system_prompt(selected)
+            agent._response_metadata_base = {"skills": [skill.id for skill in selected]}
+        if tool_names:
+            agent.tool_names = list(dict.fromkeys(tool_names))
+            agent.tool_context = ToolContext(sandbox=sandbox, web_enabled=True)
+
+    def check_skills(request: ChatRequest) -> None:
+        try:
+            skill_library.resolve(request.skill_ids)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc).strip("'")) from exc
+
+    def check_documents_mode(request: ChatRequest) -> None:
+        if not request.knowledge_root_id:
+            return
+        try:
+            safety.get_knowledge_binding(request.knowledge_root_id)
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+
     @app.post("/chat")
     def chat(request: ChatRequest) -> dict[str, object]:
         settings = resolved_chat_settings(request)
@@ -869,6 +1127,8 @@ def create_app() -> object:
             roots = authorized_root_paths(request.roots, required=False)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        check_documents_mode(request)
+        check_skills(request)
         try:
             return execute_chat(request, settings, roots, request_id)
         except Exception as exc:
@@ -883,6 +1143,8 @@ def create_app() -> object:
             roots = authorized_root_paths(request.roots, required=False)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        check_documents_mode(request)
+        check_skills(request)
 
         request_id = str(uuid.uuid4())
 
@@ -908,8 +1170,13 @@ def create_app() -> object:
 
     @app.get("/sessions/{session_id}")
     def get_session(session_id: str) -> dict[str, object]:
+        try:
+            summary: Optional[dict[str, object]] = store.get_session(session_id).to_dict()
+        except KeyError:
+            summary = None
         return {
             "session_id": session_id,
+            "session": summary,
             "messages": [
                 {
                     "role": message.role,

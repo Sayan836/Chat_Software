@@ -30,6 +30,27 @@
           <button id="remove-root" class="secondary" type="button">Remove Root</button>
         </section>
 
+        <section class="control-group documents-group" aria-label="Documents">
+          <p class="eyebrow">Documents</p>
+          <p id="knowledge-state" class="note">Retrieval backend not checked.</p>
+          <label for="knowledge-workspace">Retrieval workspace ID</label>
+          <div class="inline-controls">
+            <input id="knowledge-workspace" name="knowledge-workspace" autocomplete="off" placeholder="workspace id" />
+            <button id="bind-knowledge" type="button">Bind</button>
+          </div>
+          <label for="knowledge-binding">Bound roots</label>
+          <select id="knowledge-binding" name="knowledge-binding"></select>
+          <label class="checkbox-row" for="documents-mode">
+            <input id="documents-mode" name="documents-mode" type="checkbox" />
+            <span>Answer from bound documents</span>
+          </label>
+          <div class="control-grid">
+            <button id="unbind-knowledge" class="secondary" type="button">Unbind</button>
+            <button id="revoke-root" class="danger" type="button">Revoke Root</button>
+          </div>
+          <button id="enable-ingest" class="secondary" type="button">Enable File Submit</button>
+        </section>
+
         <section class="control-grid" aria-label="Server checks">
           <button id="check-health" type="button">Check</button>
           <button id="load-providers" type="button">Models</button>
@@ -83,6 +104,15 @@
           </div>
         </section>
 
+        <section class="control-group" aria-label="Conversations">
+          <p class="eyebrow">Conversations</p>
+          <div class="inline-controls">
+            <input id="session-search" placeholder="Search" />
+            <select id="session-filter"><option value="active">Active</option><option value="archived">Archived</option><option value="all">All</option></select>
+          </div>
+          <ul id="session-list" class="session-list"></ul>
+        </section>
+
         <section class="control-group">
           <label for="session-id">Session</label>
           <div class="inline-controls">
@@ -96,23 +126,158 @@
       <section class="panel work-panel">
         <header class="toolbar">
           <div>
-            <p class="eyebrow">Local file agent</p>
-            <h2>Conversation</h2>
+            <p class="eyebrow">Local-first assistant</p>
+            <h2 id="view-title">Conversation</h2>
           </div>
+          <nav class="tabs" role="tablist" aria-label="Workspace">
+            <button class="tab active" type="button" role="tab" data-view="chat">Chat</button>
+            <button class="tab" type="button" role="tab" data-view="research">Research</button>
+            <button class="tab" type="button" role="tab" data-view="teams">Teams</button>
+            <button class="tab" type="button" role="tab" data-view="skills">Skills</button>
+            <button class="tab" type="button" role="tab" data-view="sandbox">Sandbox</button>
+            <button class="tab" type="button" role="tab" data-view="settings">Settings</button>
+          </nav>
           <span id="request-state" class="pill">Idle</span>
         </header>
 
+        <section id="view-chat" class="view view-chat">
         <section id="messages" class="messages" aria-live="polite"></section>
 
         <form id="chat-form" class="composer">
           <label for="root-path">Approved root</label>
           <input id="root-path" name="root-path" autocomplete="off" placeholder="Selected approved roots are used automatically" />
           <label for="message">Message</label>
+          <div class="composer-options">
+            <label for="chat-skills">Skills</label>
+            <select id="chat-skills" name="chat-skills" multiple size="3"></select>
+            <div class="composer-tools">
+              <label class="checkbox-row" for="chat-tool-web"><input id="chat-tool-web" type="checkbox" /><span>Web search</span></label>
+              <label class="checkbox-row" for="chat-tool-code"><input id="chat-tool-code" type="checkbox" /><span>Code sandbox</span></label>
+            </div>
+          </div>
           <div class="composer-row">
             <textarea id="message" name="message" rows="4" required></textarea>
             <button id="send" type="submit">Send</button>
           </div>
         </form>
+        </section>
+
+        <section id="view-research" class="view view-scroll" hidden>
+          <div class="card">
+            <label for="research-question">Research question</label>
+            <textarea id="research-question" rows="3" placeholder="Compare LFP and NMC battery chemistries for home storage"></textarea>
+            <div class="inline-grid">
+              <label>Depth
+                <select id="research-depth"><option value="quick">Quick</option><option value="standard" selected>Standard</option><option value="deep">Deep</option></select>
+              </label>
+              <label class="checkbox-row"><input id="research-web" type="checkbox" checked /><span>Search the web</span></label>
+              <label class="checkbox-row"><input id="research-docs" type="checkbox" /><span>Use bound documents</span></label>
+            </div>
+            <p id="research-status" class="note"></p>
+            <button id="research-start" type="button">Start research</button>
+          </div>
+          <ol id="research-steps" class="steps"></ol>
+          <article id="research-report" class="card report" hidden></article>
+        </section>
+
+        <section id="view-teams" class="view view-scroll" hidden>
+          <div class="card">
+            <div class="inline-grid">
+              <label>Your teams <select id="team-select"></select></label>
+              <label>Start from template <select id="team-template"></select></label>
+              <button id="team-from-template" type="button" class="secondary">Create</button>
+            </div>
+            <label for="team-goal">Or describe the team you need</label>
+            <div class="inline-controls">
+              <input id="team-goal" placeholder="A team to plan and budget a product launch" />
+              <button id="team-draft" type="button" class="secondary">Design with AI</button>
+            </div>
+            <label for="team-editor">Team definition (members, roles, tools, skills)</label>
+            <textarea id="team-editor" rows="12" spellcheck="false"></textarea>
+            <div class="organize-actions">
+              <button id="team-save" type="button">Save team</button>
+              <button id="team-delete" type="button" class="danger">Delete</button>
+              <button id="team-open-chat" type="button" class="secondary">Open team chat</button>
+            </div>
+            <label for="team-task">Give the team a task (lead delegates, members work, lead integrates)</label>
+            <div class="inline-controls">
+              <input id="team-task" placeholder="Write and test a function that validates IBANs" />
+              <button id="team-run" type="button">Run task</button>
+            </div>
+          </div>
+          <div id="team-chat" class="card" hidden>
+            <p class="eyebrow">Team workspace chat <span id="team-chat-title"></span></p>
+            <div id="team-feed" class="messages team-feed" aria-live="polite"></div>
+            <p class="note">Mention an agent with @Name to address it directly; otherwise the lead moderates who speaks.</p>
+            <div class="composer-row">
+              <textarea id="team-message" rows="3"></textarea>
+              <button id="team-send" type="button">Send</button>
+            </div>
+          </div>
+        </section>
+
+        <section id="view-skills" class="view view-scroll" hidden>
+          <div class="card">
+            <div class="inline-grid">
+              <label>Skill <select id="skill-select"></select></label>
+              <button id="skill-new" type="button" class="secondary">New</button>
+              <button id="skill-duplicate" type="button" class="secondary">Duplicate</button>
+              <button id="skill-delete" type="button" class="danger">Delete</button>
+            </div>
+            <label for="skill-goal">Draft a skill with AI</label>
+            <div class="inline-controls">
+              <input id="skill-goal" placeholder="Review contracts for renewal dates and penalties" />
+              <button id="skill-draft" type="button" class="secondary">Draft</button>
+            </div>
+            <label for="skill-name">Name</label><input id="skill-name" />
+            <label for="skill-description">When to use it</label><input id="skill-description" />
+            <label for="skill-instructions">Instructions (Markdown)</label>
+            <textarea id="skill-instructions" rows="10"></textarea>
+            <div id="skill-tools" class="composer-tools"></div>
+            <p id="skill-note" class="note"></p>
+            <button id="skill-save" type="button">Save skill</button>
+          </div>
+        </section>
+
+        <section id="view-sandbox" class="view view-scroll" hidden>
+          <div class="card">
+            <p id="sandbox-status" class="note">Checking sandbox...</p>
+            <button id="sandbox-pull" type="button" class="secondary" hidden>Download sandbox image</button>
+            <div class="inline-grid">
+              <label>Language <select id="sandbox-language"><option>python</option><option>bash</option><option>javascript</option></select></label>
+              <label>Timeout (s) <input id="sandbox-timeout" type="number" min="1" max="120" value="30" /></label>
+            </div>
+            <textarea id="sandbox-code" rows="12" spellcheck="false">print("Hello from the sandbox")</textarea>
+            <button id="sandbox-run" type="button">Run</button>
+            <pre id="sandbox-output" class="raw-output"></pre>
+          </div>
+        </section>
+
+        <section id="view-settings" class="view view-scroll" hidden>
+          <div class="card">
+            <h3>Model providers and keys</h3>
+            <p class="note">Keys are stored only on this computer (owner-only file) and are never shown again.</p>
+            <div id="settings-values" class="settings-grid"></div>
+          </div>
+          <div class="card">
+            <h3>Verify a provider</h3>
+            <div class="inline-controls">
+              <select id="verify-provider"><option value="openai">OpenAI (ChatGPT)</option><option value="anthropic">Anthropic (Claude)</option><option value="compatible">OpenAI-compatible</option></select>
+              <button id="verify-run" type="button" class="secondary">List models</button>
+            </div>
+            <pre id="verify-output" class="raw-output"></pre>
+          </div>
+          <div class="card">
+            <h3>Install open models from Hugging Face</h3>
+            <div class="inline-controls">
+              <input id="hf-query" placeholder="qwen2.5 7b instruct" />
+              <button id="hf-search" type="button" class="secondary">Search GGUF</button>
+            </div>
+            <ul id="hf-results" class="hf-results"></ul>
+            <h3>Downloads</h3>
+            <ul id="pull-jobs" class="hf-results"></ul>
+          </div>
+        </section>
       </section>
 
       <aside class="panel details-panel">
@@ -201,11 +366,39 @@
           </label>
           <button id="run-command" type="button">Run</button>
         </section>
+        <section class="ingest-panel" aria-label="Submit files">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Selected files only</p>
+              <h3>Submit Files</h3>
+            </div>
+            <span id="ingest-state" class="pill">Idle</span>
+          </div>
+          <label for="ingest-paths">Paths inside the bound root (one per line)</label>
+          <textarea id="ingest-paths" name="ingest-paths" rows="3" placeholder="reports/q3-ledger.csv"></textarea>
+          <div class="organize-actions">
+            <button id="ingest-preview" type="button">Preview</button>
+            <button id="ingest-approve" class="secondary" type="button" disabled>Approve &amp; Send</button>
+            <button id="ingest-discard" class="secondary" type="button" disabled>Discard</button>
+          </div>
+          <section id="ingest-plan" class="ingest-plan" aria-live="polite"></section>
+        </section>
+        <section class="source-panel" aria-label="Source viewer">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Untrusted document text</p>
+              <h3>Source</h3>
+            </div>
+            <span id="source-state" class="pill">None</span>
+          </div>
+          <pre id="source-viewer" class="source-viewer">Select a citation to open its source page.</pre>
+        </section>
         <section id="tool-calls" class="tool-calls"></section>
         <pre id="raw-output" class="raw-output"></pre>
       </aside>
     </main>
 
     <script src="/static/app.js" defer></script>
+    <script src="/static/platform.js" defer></script>
   </body>
 </html>

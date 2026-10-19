@@ -726,3 +726,76 @@ h2 {
     flex-direction: column;
   }
 }
+
+.documents-group {
+  border-top: 1px solid #d4dbe7;
+  padding-top: 12px;
+}
+
+.citations {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.citation-chip {
+  min-height: 28px;
+  font-size: 0.8rem;
+  padding: 3px 8px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.citation-note {
+  align-self: center;
+  color: #5b6577;
+  font-size: 0.8rem;
+}
+
+.source-panel {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.source-viewer {
+  max-height: 260px;
+  border: 1px solid #d4dbe7;
+  border-radius: 6px;
+  padding: 10px;
+  color: #243047;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+.ingest-panel {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.ingest-files {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 18px;
+  color: #243047;
+  font-size: 0.85rem;
+}
+
+.ingest-file.completed {
+  color: #1f7a45;
+}
+
+.ingest-file.failed,
+.ingest-file.error,
+.ingest-file.changed,
+.ingest-file.rejected {
+  color: #b42318;
+}

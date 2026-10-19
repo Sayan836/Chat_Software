@@ -38,6 +38,17 @@ const organizePreview = document.querySelector("#organize-preview");
 const organizePlanButton = document.querySelector("#organize-plan");
 const organizeApplyButton = document.querySelector("#organize-apply");
 const organizeUndoButton = document.querySelector("#organize-undo");
+const knowledgeState = document.querySelector("#knowledge-state");
+const knowledgeWorkspace = document.querySelector("#knowledge-workspace");
+const knowledgeBinding = document.querySelector("#knowledge-binding");
+const documentsMode = document.querySelector("#documents-mode");
+const sourceViewer = document.querySelector("#source-viewer");
+const sourceState = document.querySelector("#source-state");
+const ingestPaths = document.querySelector("#ingest-paths");
+const ingestPlan = document.querySelector("#ingest-plan");
+const ingestState = document.querySelector("#ingest-state");
+const ingestApproveButton = document.querySelector("#ingest-approve");
+const ingestDiscardButton = document.querySelector("#ingest-discard");
 
 const storedApiBase = localStorage.getItem("chatSoftwareApiBase");
 const defaultApiBase = window.location.protocol === "file:" ? "http://127.0.0.1:8765" : window.location.origin;
@@ -46,6 +57,9 @@ let providerOptions = [];
 let approvedRoots = JSON.parse(localStorage.getItem("chatSoftwareApprovedRoots") || "[]");
 let currentOrganizePlan = null;
 let commandSequence = 0;
+let knowledgeBindings = [];
+let currentIngestSubmission = null;
+let ingestPollTimer = null;
 
 apiBaseInput.value = storedApiBase || defaultApiBase;
 sessionInput.value = currentSessionId;
@@ -159,6 +173,313 @@ function appendMessage(role, content) {
   row.append(label, text);
   messages.append(row);
   messages.scrollTop = messages.scrollHeight;
+  return row;
+}
+
+function documentsFromToolCalls(calls) {
+  const call = (calls || []).find((item) => item.name === "knowledge_search");
+  return call ? call.result || null : null;
+}
+
+function renderCitations(row, documents) {
+  if (!row || !documents) return;
+  const footer = document.createElement("div");
+  footer.className = "citations";
+  const citations = documents.citations || [];
+  if (citations.length === 0) {
+    const note = document.createElement("span");
+    note.className = "citation-note";
+    note.textContent = documents.refused
+      ? `No answer: ${String(documents.reason || "refused").replaceAll("_", " ")}`
+      : "No citations";
+    footer.append(note);
+  }
+  citations.forEach((citation) => {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "citation-chip secondary";
+    const where = citation.filename || citation.document_id;
+    const rows = citation.row_range
+      ? citation.row_range[0] === citation.row_range[1]
+        ? ` row ${citation.row_range[0]}`
+        : ` rows ${citation.row_range[0]}\u2013${citation.row_range[1]}`
+      : "";
+    chip.textContent = `[${citation.index}] ${where}${citation.page ? ` p.${citation.page}` : ""}${rows}`;
+    chip.title = citation.excerpt || "";
+    chip.addEventListener("click", () =>
+      openSource(documents.root_id, citation.document_id, citation.page || 1, citation.excerpt)
+    );
+    footer.append(chip);
+  });
+  if (documents.retrieval_status && documents.retrieval_status.degraded) {
+    const warn = document.createElement("span");
+    warn.className = "citation-note";
+    warn.textContent = "Retrieval degraded";
+    footer.append(warn);
+  }
+  row.append(footer);
+}
+
+async function openSource(rootId, documentId, page = 1, excerpt = "") {
+  sourceState.textContent = "Opening";
+  sourceState.className = "pill busy";
+  try {
+    const data = await requestJson("/knowledge/source", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ root_id: rootId, document_id: documentId, page })
+    });
+    const header = `${documentId} \u2022 page ${data.page}${data.truncated ? " (truncated)" : ""}`;
+    const body = data.needs_ocr ? "[This page has no extractable text; OCR is needed.]" : data.text;
+    sourceViewer.textContent = `${header}\n\n${body}`;
+    if (excerpt) sourceViewer.title = `Cited excerpt: ${excerpt}`;
+    sourceState.textContent = "Untrusted";
+    sourceState.className = "pill ok";
+  } catch (error) {
+    sourceViewer.textContent = error.message;
+    sourceState.textContent = "Denied";
+    sourceState.className = "pill error";
+  }
+}
+
+function selectedKnowledgeRootId() {
+  return knowledgeBinding.value || "";
+}
+
+function renderKnowledgeBindings() {
+  const previous = knowledgeBinding.value;
+  knowledgeBinding.replaceChildren();
+  if (knowledgeBindings.length === 0) {
+    knowledgeBinding.append(option("No bound roots", ""));
+    documentsMode.checked = false;
+    documentsMode.disabled = true;
+    return;
+  }
+  documentsMode.disabled = false;
+  knowledgeBindings.forEach((binding) => {
+    knowledgeBinding.append(
+      option(
+        `${binding.root_name || binding.root_path} \u2192 ${binding.workspace_id}${binding.ingest_enabled ? " (submit on)" : ""}`,
+        binding.root_id
+      )
+    );
+  });
+  if (knowledgeBindings.some((binding) => binding.root_id === previous)) {
+    knowledgeBinding.value = previous;
+  }
+}
+
+async function loadKnowledge() {
+  try {
+    const status = await requestJson("/knowledge/status");
+    knowledgeState.textContent = status.configured
+      ? `Retrieval backend: ${status.base_url}`
+      : status.error || "Retrieval backend not configured (CHAT_SOFTWARE_KNOWLEDGE_URL).";
+    const data = await requestJson("/knowledge/bindings");
+    knowledgeBindings = data.bindings || [];
+  } catch (error) {
+    knowledgeState.textContent = error.message;
+    knowledgeBindings = [];
+  }
+  renderKnowledgeBindings();
+}
+
+async function serverRootIdForPath(path) {
+  const data = await requestJson("/roots");
+  const match = (data.roots || []).find((root) => root.path === path);
+  if (!match) throw new Error(`Root is not approved on the server: ${path}`);
+  return match.root_id;
+}
+
+async function bindKnowledgeRoot() {
+  const roots = activeRoots();
+  const workspaceId = knowledgeWorkspace.value.trim();
+  if (roots.length !== 1 || !workspaceId) {
+    appendMessage("system", "Select exactly one approved root and enter a retrieval workspace ID.");
+    return;
+  }
+  setBusy(true);
+  try {
+    const rootId = await serverRootIdForPath(roots[0]);
+    const data = await requestJson("/knowledge/bindings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ root_id: rootId, workspace_id: workspaceId })
+    });
+    renderRaw(data);
+    await loadKnowledge();
+    knowledgeBinding.value = rootId;
+  } catch (error) {
+    appendMessage("system", error.message);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function unbindKnowledgeRoot() {
+  const rootId = selectedKnowledgeRootId();
+  if (!rootId) return;
+  try {
+    renderRaw(await requestJson(`/knowledge/bindings/${encodeURIComponent(rootId)}`, { method: "DELETE" }));
+  } catch (error) {
+    appendMessage("system", error.message);
+  }
+  await loadKnowledge();
+}
+
+function setIngestState(text, mode = "") {
+  ingestState.textContent = text;
+  ingestState.className = mode ? `pill ${mode}` : "pill";
+}
+
+function formatBytes(size) {
+  if (size >= 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+  if (size >= 1024) return `${Math.round(size / 1024)} KB`;
+  return `${size} B`;
+}
+
+function renderIngestPlan(plan) {
+  currentIngestSubmission = plan && plan.submission_id ? plan : null;
+  ingestPlan.replaceChildren();
+  const pending = Boolean(plan && plan.status === "awaiting_approval");
+  ingestApproveButton.disabled = !pending;
+  ingestDiscardButton.disabled = !pending;
+  if (!plan) return;
+  if (plan.destination) {
+    const destination = document.createElement("p");
+    destination.className = "note";
+    destination.textContent =
+      `Destination: ${plan.destination.workspace_name || plan.destination.workspace_id} on ` +
+      `${plan.destination.location}. ${plan.destination.note}`;
+    ingestPlan.append(destination);
+  }
+  const list = document.createElement("ul");
+  list.className = "ingest-files";
+  (plan.files || []).forEach((file) => {
+    const item = document.createElement("li");
+    const detail = file.chunks_indexed ? `, ${file.chunks_indexed} chunks` : "";
+    item.textContent = `${file.rel_path} (${formatBytes(file.size_bytes)}) \u2014 ${file.status}${detail}`;
+    if (file.error) item.title = file.error;
+    item.className = `ingest-file ${file.status}`;
+    list.append(item);
+  });
+  (plan.rejected || []).forEach((file) => {
+    const item = document.createElement("li");
+    item.textContent = `${file.path} \u2014 not sent: ${file.reason}`;
+    item.className = "ingest-file rejected";
+    list.append(item);
+  });
+  ingestPlan.append(list);
+  setIngestState(plan.status ? plan.status.replaceAll("_", " ") : "Idle", plan.status === "finished" ? "ok" : "");
+}
+
+async function enableIngest() {
+  const rootId = selectedKnowledgeRootId();
+  if (!rootId) {
+    appendMessage("system", "Bind a root to a retrieval workspace first.");
+    return;
+  }
+  try {
+    const data = await requestJson("/knowledge/ingest/enable", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ root_id: rootId })
+    });
+    renderRaw(data);
+    await loadKnowledge();
+    knowledgeBinding.value = rootId;
+  } catch (error) {
+    appendMessage("system", error.message);
+  }
+}
+
+async function previewIngest() {
+  const rootId = selectedKnowledgeRootId();
+  const paths = ingestPaths.value.split("\n").map((line) => line.trim()).filter(Boolean);
+  if (!rootId || paths.length === 0) {
+    appendMessage("system", "Select a bound root and list the files to submit.");
+    return;
+  }
+  setIngestState("Checking", "busy");
+  try {
+    const plan = await requestJson("/knowledge/ingest/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ root_id: rootId, paths })
+    });
+    renderIngestPlan(plan);
+    renderRaw(plan);
+  } catch (error) {
+    setIngestState("Error", "error");
+    appendMessage("system", error.message);
+  }
+}
+
+function scheduleIngestPoll(submissionId, attempt = 0) {
+  window.clearTimeout(ingestPollTimer);
+  if (attempt > 150) return;
+  ingestPollTimer = window.setTimeout(async () => {
+    try {
+      const status = await requestJson(`/knowledge/ingest/${encodeURIComponent(submissionId)}`);
+      renderIngestPlan(status);
+      if (status.status !== "finished") scheduleIngestPoll(submissionId, attempt + 1);
+    } catch (error) {
+      setIngestState("Error", "error");
+      appendMessage("system", error.message);
+    }
+  }, 2000);
+}
+
+async function approveIngest() {
+  const plan = currentIngestSubmission;
+  if (!plan) return;
+  const names = (plan.files || []).map((file) => file.rel_path).join(", ");
+  const where = plan.destination ? plan.destination.location : "the retrieval backend";
+  if (!window.confirm(`Send ${plan.files.length} file(s) to ${where}? ${names}`)) return;
+  ingestApproveButton.disabled = true;
+  ingestDiscardButton.disabled = true;
+  setIngestState("Sending", "busy");
+  try {
+    const status = await requestJson(`/knowledge/ingest/${encodeURIComponent(plan.submission_id)}/approve`, {
+      method: "POST"
+    });
+    renderIngestPlan({ ...status, destination: plan.destination });
+    renderRaw(status);
+    if (status.status !== "finished") scheduleIngestPoll(plan.submission_id);
+  } catch (error) {
+    setIngestState("Error", "error");
+    appendMessage("system", error.message);
+  }
+}
+
+async function discardIngest() {
+  const plan = currentIngestSubmission;
+  if (!plan) return;
+  try {
+    await requestJson(`/knowledge/ingest/${encodeURIComponent(plan.submission_id)}`, { method: "DELETE" });
+    renderIngestPlan(null);
+    setIngestState("Discarded");
+  } catch (error) {
+    appendMessage("system", error.message);
+  }
+}
+
+async function revokeKnowledgeRoot() {
+  const rootId = selectedKnowledgeRootId();
+  const binding = knowledgeBindings.find((item) => item.root_id === rootId);
+  if (!binding) return;
+  if (!window.confirm(`Revoke ${binding.root_path}? File tools and document search for it stop immediately.`)) {
+    return;
+  }
+  try {
+    renderRaw(await requestJson(`/roots/${encodeURIComponent(rootId)}/revoke`, { method: "POST" }));
+    approvedRoots = approvedRoots.filter((root) => root !== binding.root_path);
+    saveApprovedRoots();
+    renderApprovedRoots();
+  } catch (error) {
+    appendMessage("system", error.message);
+  }
+  await loadKnowledge();
 }
 
 function renderToolCalls(calls) {
@@ -860,7 +1181,12 @@ async function loadSession() {
     if (!data.messages || data.messages.length === 0) {
       showEmptyState();
     } else {
-      data.messages.forEach((message) => appendMessage(message.role, message.content));
+      data.messages.forEach((message) => {
+        const row = appendMessage(message.role, message.content);
+        if (message.metadata && message.metadata.documents) {
+          renderCitations(row, message.metadata.documents);
+        }
+      });
     }
     renderCommandHistoryFromMessages(data.messages || []);
     currentSessionId = data.session_id;
@@ -891,6 +1217,15 @@ async function sendMessage(event) {
     provider,
     model: model || undefined
   };
+  if (typeof composerExtras === "function") Object.assign(payload, composerExtras());
+  if (documentsMode.checked) {
+    const knowledgeRootId = selectedKnowledgeRootId();
+    if (!knowledgeRootId) {
+      appendMessage("system", "Bind a root to a retrieval workspace before using Documents mode.");
+      return;
+    }
+    payload.knowledge_root_id = knowledgeRootId;
+  }
 
   appendMessage("user", text);
   messageInput.value = "";
@@ -958,7 +1293,8 @@ async function sendMessage(event) {
     currentSessionId = data.session_id;
     sessionInput.value = currentSessionId;
     localStorage.setItem("chatSoftwareSessionId", currentSessionId);
-    appendMessage("assistant", data.response || "");
+    const assistantRow = appendMessage("assistant", data.response || "");
+    renderCitations(assistantRow, documentsFromToolCalls(data.tool_calls));
     providerState.textContent = data.provider || provider;
     modelState.textContent = data.model || model || modelState.textContent;
     if (data.model) {
@@ -1216,6 +1552,13 @@ document.querySelector("#refresh-ollama").addEventListener("click", refreshOllam
 document.querySelector("#pull-ollama").addEventListener("click", pullOllamaModel);
 document.querySelector("#delete-ollama").addEventListener("click", deleteOllamaModel);
 document.querySelector("#load-session").addEventListener("click", loadSession);
+document.querySelector("#bind-knowledge").addEventListener("click", bindKnowledgeRoot);
+document.querySelector("#unbind-knowledge").addEventListener("click", unbindKnowledgeRoot);
+document.querySelector("#revoke-root").addEventListener("click", revokeKnowledgeRoot);
+document.querySelector("#enable-ingest").addEventListener("click", enableIngest);
+document.querySelector("#ingest-preview").addEventListener("click", previewIngest);
+ingestApproveButton.addEventListener("click", approveIngest);
+ingestDiscardButton.addEventListener("click", discardIngest);
 providerSelect.addEventListener("change", () => {
   localStorage.removeItem("chatSoftwareModel");
   updateProviderNote();
@@ -1266,3 +1609,4 @@ renderOrganizeEmpty();
 renderApprovedRoots();
 checkHealth();
 loadProviders();
+loadKnowledge();

@@ -37,6 +37,7 @@ def build_root_graph(agent: Any) -> Any:
         working_path=agent.working_path,
         chat_handler=agent._run_chat_agent,
         file_ops_handler=agent._run_file_ops_agent,
+        document_handler=agent._run_document_agent,
     )
     mounted = {name: spec.build(deps) for name, spec in AGENTS.items()}
 
@@ -46,6 +47,11 @@ def build_root_graph(agent: Any) -> Any:
             return Command(
                 goto="file_ops",
                 update={"route": "file_ops", "route_reason": "pending_file_operation"},
+            )
+        if getattr(agent, "knowledge_root_id", None):
+            return Command(
+                goto="documents",
+                update={"route": "documents", "route_reason": "documents mode selected"},
             )
         decision = route_message(
             str(state.get("message") or ""),
@@ -59,7 +65,15 @@ def build_root_graph(agent: Any) -> Any:
         )
 
     def chat_wrapper(state: RootState) -> RootState:
-        output = mounted["chat"].invoke({"message": state.get("message", "")})
+        previous_callback = agent.runtime_callback
+        writer = _runtime_event_writer() if state.get("emit_to_stream") else None
+        if writer is not None:
+            agent.runtime_callback = writer
+        try:
+            output = mounted["chat"].invoke({"message": state.get("message", "")})
+        finally:
+            if writer is not None:
+                agent.runtime_callback = previous_callback
         return {
             "response": output.get("response", ""),
             "tool_calls": output.get("tool_calls", []),
@@ -89,6 +103,22 @@ def build_root_graph(agent: Any) -> Any:
             if needs_chat_fallback
             else [_tool_call_to_state(record) for record in output.get("tool_calls", [])],
             "needs_chat_fallback": needs_chat_fallback,
+        }
+
+    def documents_wrapper(state: RootState) -> RootState:
+        previous_callback = agent.runtime_callback
+        writer = _runtime_event_writer() if state.get("emit_to_stream") else None
+        if writer is not None:
+            agent.runtime_callback = writer
+        try:
+            output = mounted["documents"].invoke({"message": state.get("message", "")})
+        finally:
+            if writer is not None:
+                agent.runtime_callback = previous_callback
+        return {
+            "response": output.get("response", ""),
+            "tool_calls": [_tool_call_to_state(record) for record in output.get("tool_calls", [])],
+            "needs_chat_fallback": False,
         }
 
     def after_file_ops(state: RootState) -> str:
@@ -143,9 +173,10 @@ def build_root_graph(agent: Any) -> Any:
         return writer if callable(writer) else None
 
     graph = StateGraph(RootState)
-    graph.add_node("router", router, destinations=("file_ops", "chat"))
+    graph.add_node("router", router, destinations=("file_ops", "chat", "documents"))
     graph.add_node("file_ops", file_ops_wrapper)
     graph.add_node("chat", chat_wrapper)
+    graph.add_node("documents", documents_wrapper)
     graph.add_node("respond", respond)
     graph.add_edge(START, "router")
     graph.add_conditional_edges(
@@ -157,6 +188,7 @@ def build_root_graph(agent: Any) -> Any:
         },
     )
     graph.add_edge("chat", "respond")
+    graph.add_edge("documents", "respond")
     graph.add_edge("respond", END)
     try:
         return graph.compile(checkpointer=build_checkpointer())

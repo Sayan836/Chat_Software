@@ -69,6 +69,21 @@ class MainStaticUiTests(unittest.TestCase):
         self.assertIn(".command-console", css_resp.text)
         self.assertIn(".command-index", css_resp.text)
 
+    def test_documents_mode_controls_are_served(self) -> None:
+        html = self.client.get("/").text
+        js = self.client.get("/static/app.js").text
+        css = self.client.get("/static/styles.css").text
+        for element_id in ("knowledge-binding", "documents-mode", "bind-knowledge", "source-viewer"):
+            self.assertIn(f'id="{element_id}"', html)
+        self.assertIn("knowledge_root_id", js)
+        self.assertIn("/knowledge/source", js)
+        self.assertIn("renderCitations", js)
+        self.assertIn(".citation-chip", css)
+        for element_id in ("enable-ingest", "ingest-paths", "ingest-preview", "ingest-approve"):
+            self.assertIn(f'id="{element_id}"', html)
+        self.assertIn("/knowledge/ingest/preview", js)
+        self.assertIn("row_range", js)
+
     def test_api_routes_still_work_from_main_app(self) -> None:
         resp = self.client.get("/health")
         self.assertEqual(resp.status_code, 200)

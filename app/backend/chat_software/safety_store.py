@@ -136,6 +136,57 @@ class SafetyStore:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS knowledge_bindings (
+                    root_id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    credential_ref TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL,
+                    revoked_at REAL,
+                    FOREIGN KEY(root_id) REFERENCES approved_roots(id)
+                )
+                """
+            )
+            binding_columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(knowledge_bindings)").fetchall()
+            }
+            if "ingest_credential_ref" not in binding_columns:
+                conn.execute("ALTER TABLE knowledge_bindings ADD COLUMN ingest_credential_ref TEXT")
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS knowledge_ingest_submissions (
+                    id TEXT PRIMARY KEY,
+                    root_id TEXT NOT NULL,
+                    workspace_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL,
+                    approved_at REAL,
+                    FOREIGN KEY(root_id) REFERENCES approved_roots(id)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS knowledge_ingest_files (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    submission_id TEXT NOT NULL,
+                    rel_path TEXT NOT NULL,
+                    size_bytes INTEGER NOT NULL,
+                    sha256 TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    asset_id TEXT,
+                    document_id TEXT,
+                    chunks_indexed INTEGER,
+                    error TEXT,
+                    updated_at REAL NOT NULL,
+                    UNIQUE(submission_id, rel_path),
+                    FOREIGN KEY(submission_id) REFERENCES knowledge_ingest_submissions(id)
+                )
+                """
+            )
 
     def approve_root(self, requested_path: str | Path) -> ApprovedRoot:
         root = Path(requested_path).expanduser().resolve()
@@ -230,6 +281,266 @@ class SafetyStore:
         if not authorized:
             raise PermissionError("At least one server-approved root is required.")
         return authorized
+
+    def revoke_root(self, root_id: str) -> ApprovedRoot:
+        """Revoke a root and every knowledge binding attached to it.
+
+        Bindings stay revoked if the root is later re-approved: indexed content
+        must be re-bound explicitly rather than silently becoming reachable again.
+        """
+
+        now = time.time()
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM approved_roots WHERE id = ? AND revoked_at IS NULL",
+                (root_id,),
+            ).fetchone()
+            if row is None:
+                raise PermissionError(f"Root is not approved: {root_id}")
+            conn.execute(
+                "UPDATE approved_roots SET revoked_at = ?, updated_at = ? WHERE id = ?",
+                (now, now, root_id),
+            )
+            conn.execute(
+                """
+                UPDATE knowledge_bindings SET revoked_at = ?, updated_at = ?
+                WHERE root_id = ? AND revoked_at IS NULL
+                """,
+                (now, now, root_id),
+            )
+            self._insert_audit(
+                conn,
+                event_type="root.revoked",
+                root_id=root_id,
+                path=row["path"],
+                metadata={"name": row["name"]},
+                created_at=now,
+            )
+            row = conn.execute("SELECT * FROM approved_roots WHERE id = ?", (root_id,)).fetchone()
+        return self._approved_root_from_row(row)
+
+    def bind_knowledge(self, root_id: str, workspace_id: str, credential_ref: str) -> dict[str, Any]:
+        """Associate an active root with one retrieval-backend workspace."""
+
+        root = self.get_approved_root(root_id)
+        now = time.time()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO knowledge_bindings
+                    (root_id, workspace_id, credential_ref, created_at, updated_at, revoked_at)
+                VALUES (?, ?, ?, ?, ?, NULL)
+                ON CONFLICT(root_id) DO UPDATE SET
+                    workspace_id = excluded.workspace_id,
+                    credential_ref = excluded.credential_ref,
+                    updated_at = excluded.updated_at,
+                    revoked_at = NULL
+                """,
+                (root.id, workspace_id, credential_ref, now, now),
+            )
+            self._insert_audit(
+                conn,
+                event_type="knowledge.bound",
+                root_id=root.id,
+                path=str(root.path),
+                metadata={"workspace_id": workspace_id, "credential_ref": credential_ref},
+                created_at=now,
+            )
+        return self.get_knowledge_binding(root.id)
+
+    def unbind_knowledge(self, root_id: str) -> None:
+        now = time.time()
+        with self._connect() as conn:
+            updated = conn.execute(
+                """
+                UPDATE knowledge_bindings SET revoked_at = ?, updated_at = ?
+                WHERE root_id = ? AND revoked_at IS NULL
+                """,
+                (now, now, root_id),
+            ).rowcount
+            if not updated:
+                raise KeyError(f"No active knowledge binding for root: {root_id}")
+            self._insert_audit(
+                conn,
+                event_type="knowledge.unbound",
+                root_id=root_id,
+                metadata={},
+                created_at=now,
+            )
+
+    def get_knowledge_binding(self, root_id: str) -> dict[str, Any]:
+        """Return the active binding for an active root, or raise PermissionError.
+
+        Called before every retrieval and source-open so revocation is immediate.
+        """
+
+        root = self.get_approved_root(root_id)
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM knowledge_bindings WHERE root_id = ? AND revoked_at IS NULL",
+                (root.id,),
+            ).fetchone()
+        if row is None:
+            raise PermissionError(f"Root has no active knowledge binding: {root_id}")
+        return {
+            "root_id": row["root_id"],
+            "root_path": str(root.path),
+            "root_name": root.name,
+            "workspace_id": row["workspace_id"],
+            "credential_ref": row["credential_ref"],
+            "ingest_credential_ref": row["ingest_credential_ref"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+
+    def set_ingest_credential(self, root_id: str, credential_ref: Optional[str]) -> dict[str, Any]:
+        binding = self.get_knowledge_binding(root_id)
+        now = time.time()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE knowledge_bindings SET ingest_credential_ref = ?, updated_at = ?
+                WHERE root_id = ? AND revoked_at IS NULL
+                """,
+                (credential_ref, now, root_id),
+            )
+            self._insert_audit(
+                conn,
+                event_type="knowledge.ingest_enabled" if credential_ref else "knowledge.ingest_disabled",
+                root_id=root_id,
+                metadata={"workspace_id": binding["workspace_id"], "credential_ref": credential_ref},
+                created_at=now,
+            )
+        return self.get_knowledge_binding(root_id)
+
+    def create_ingest_submission(
+        self,
+        root_id: str,
+        workspace_id: str,
+        files: Iterable[dict[str, Any]],
+    ) -> str:
+        submission_id = str(uuid.uuid4())
+        now = time.time()
+        files = list(files)
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO knowledge_ingest_submissions
+                    (id, root_id, workspace_id, status, created_at, updated_at, approved_at)
+                VALUES (?, ?, ?, 'awaiting_approval', ?, ?, NULL)
+                """,
+                (submission_id, root_id, workspace_id, now, now),
+            )
+            for item in files:
+                conn.execute(
+                    """
+                    INSERT INTO knowledge_ingest_files
+                        (submission_id, rel_path, size_bytes, sha256, status, updated_at)
+                    VALUES (?, ?, ?, ?, 'awaiting_approval', ?)
+                    """,
+                    (submission_id, item["rel_path"], int(item["size_bytes"]), item["sha256"], now),
+                )
+            self._insert_audit(
+                conn,
+                event_type="knowledge.ingest_previewed",
+                root_id=root_id,
+                metadata={
+                    "submission_id": submission_id,
+                    "workspace_id": workspace_id,
+                    "files": len(files),
+                },
+                created_at=now,
+            )
+        return submission_id
+
+    def get_ingest_submission(self, submission_id: str) -> dict[str, Any]:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM knowledge_ingest_submissions WHERE id = ?",
+                (submission_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"Ingest submission not found: {submission_id}")
+            files = conn.execute(
+                "SELECT * FROM knowledge_ingest_files WHERE submission_id = ? ORDER BY id ASC",
+                (submission_id,),
+            ).fetchall()
+        return {
+            "submission_id": row["id"],
+            "root_id": row["root_id"],
+            "workspace_id": row["workspace_id"],
+            "status": row["status"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "approved_at": row["approved_at"],
+            "files": [
+                {
+                    "id": item["id"],
+                    "rel_path": item["rel_path"],
+                    "size_bytes": item["size_bytes"],
+                    "sha256": item["sha256"],
+                    "status": item["status"],
+                    "asset_id": item["asset_id"],
+                    "document_id": item["document_id"],
+                    "chunks_indexed": item["chunks_indexed"],
+                    "error": item["error"],
+                    "updated_at": item["updated_at"],
+                }
+                for item in files
+            ],
+        }
+
+    def update_ingest_submission_status(self, submission_id: str, status: str) -> None:
+        now = time.time()
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT root_id FROM knowledge_ingest_submissions WHERE id = ?",
+                (submission_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"Ingest submission not found: {submission_id}")
+            approved_at = now if status == "submitting" else None
+            conn.execute(
+                """
+                UPDATE knowledge_ingest_submissions
+                SET status = ?, updated_at = ?, approved_at = COALESCE(approved_at, ?)
+                WHERE id = ?
+                """,
+                (status, now, approved_at, submission_id),
+            )
+            self._insert_audit(
+                conn,
+                event_type=f"knowledge.ingest_{status}",
+                root_id=row["root_id"],
+                metadata={"submission_id": submission_id},
+                created_at=now,
+            )
+
+    def update_ingest_file(self, file_id: int, **fields: Any) -> None:
+        allowed = {"status", "asset_id", "document_id", "chunks_indexed", "error"}
+        unknown = set(fields) - allowed
+        if unknown:
+            raise ValueError(f"Unknown ingest file fields: {sorted(unknown)}")
+        if not fields:
+            return
+        assignments = ", ".join(f"{name} = ?" for name in fields)
+        with self._connect() as conn:
+            conn.execute(
+                f"UPDATE knowledge_ingest_files SET {assignments}, updated_at = ? WHERE id = ?",
+                (*fields.values(), time.time(), file_id),
+            )
+
+    def list_knowledge_bindings(self) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT b.root_id FROM knowledge_bindings b
+                JOIN approved_roots r ON r.id = b.root_id
+                WHERE b.revoked_at IS NULL AND r.revoked_at IS NULL
+                ORDER BY b.updated_at DESC
+                """
+            ).fetchall()
+        return [self.get_knowledge_binding(row["root_id"]) for row in rows]
 
     def create_organize_plan(
         self,

@@ -18,7 +18,13 @@ from pathlib import Path
 from typing import Optional
 
 
-SUPPORTED_PROVIDERS = {"ollama", "openai", "anthropic"}
+SUPPORTED_PROVIDERS = {"ollama", "openai", "anthropic", "compatible"}
+PROVIDER_LABELS = {
+    "ollama": "Ollama (local)",
+    "openai": "OpenAI (ChatGPT)",
+    "anthropic": "Anthropic (Claude)",
+    "compatible": "OpenAI-compatible endpoint",
+}
 DEFAULT_PROVIDER = "ollama"
 
 
@@ -152,6 +158,10 @@ def resolve_model(
             or os.getenv("LLM_MODEL")
             or "claude-3-5-haiku-latest"
         )
+    if active_provider == "compatible":
+        from chat_software import secrets_store
+
+        return secrets_store.get("COMPATIBLE_MODEL") or os.getenv("LLM_MODEL") or ""
     return os.getenv("OPENAI_MODEL") or os.getenv("LLM_MODEL") or "gpt-4o-mini"
 
 
@@ -219,20 +229,31 @@ def get_provider_settings(
             temperature=temperature,
             max_tokens=max_tokens,
         )
+    from chat_software import secrets_store
+
     if active_provider == "anthropic":
         return ProviderSettings(
             provider=active_provider,
             model=model,
-            api_key=api_key or os.getenv("ANTHROPIC_API_KEY"),
-            base_url=base_url or os.getenv("ANTHROPIC_BASE_URL"),
+            api_key=api_key or secrets_store.get("ANTHROPIC_API_KEY"),
+            base_url=base_url or secrets_store.get("ANTHROPIC_BASE_URL"),
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+    if active_provider == "compatible":
+        return ProviderSettings(
+            provider=active_provider,
+            model=model,
+            api_key=api_key or secrets_store.get("COMPATIBLE_API_KEY") or "not-needed",
+            base_url=base_url or secrets_store.get("COMPATIBLE_BASE_URL"),
             temperature=temperature,
             max_tokens=max_tokens,
         )
     return ProviderSettings(
         provider=active_provider,
         model=model,
-        api_key=api_key or os.getenv("OPENAI_API_KEY"),
-        base_url=base_url or os.getenv("OPENAI_BASE_URL"),
+        api_key=api_key or secrets_store.get("OPENAI_API_KEY"),
+        base_url=base_url or secrets_store.get("OPENAI_BASE_URL"),
         temperature=temperature,
         max_tokens=max_tokens,
     )

@@ -19,6 +19,11 @@ Local-first chat and file-agent implementation.
   - `POST /files/grep`
   - `POST /commands/git/status`
   - `POST /commands/git/diff`
+  - `POST /roots/{root_id}/revoke` (also revokes that root's knowledge binding)
+  - `GET /knowledge/status`, `GET|POST /knowledge/bindings`, `DELETE /knowledge/bindings/{root_id}`
+  - `POST /knowledge/search`, `POST /knowledge/source`
+  - `POST /knowledge/ingest/enable`, `POST /knowledge/ingest/preview`,
+    `POST /knowledge/ingest/{id}/approve`, `GET|DELETE /knowledge/ingest/{id}`
 - FastAPI-served browser console at `/` for manual API testing.
 - Real chat calls use the configured provider by default. Set
   `CHAT_SOFTWARE_OFFLINE_ECHO=1` only for no-model smoke tests.
@@ -60,6 +65,38 @@ Local-first chat and file-agent implementation.
 - MCP server exposing the read-only tools when the `mcp` dependency is installed.
 - Session checkpointing to SQLite for Phase 1 conversations.
 - A deterministic read-only agent fallback, so tests pass without network, Ollama, or cloud keys.
+
+## Documents mode (Hybrid Retrieval Lab connector)
+
+Document questions use the Hybrid Retrieval Lab's scoped, read-only HTTP API;
+this app never indexes or embeds documents itself (`chat_software/knowledge/`).
+
+1. Run the Retrieval Lab and issue a workspace-scoped `hrk_` key there.
+2. Set `CHAT_SOFTWARE_KNOWLEDGE_URL` and `CHAT_SOFTWARE_KNOWLEDGE_API_KEY` for the
+   sidecar (see `.env.example`). The key is never returned to the browser.
+3. Approve a root, then bind it to a workspace the key can see
+   (`POST /knowledge/bindings` or the Documents panel).
+4. Tick "Answer from bound documents" (or send `knowledge_root_id` to `/chat`).
+
+Answers come from the selected provider/model and must cite the retrieved
+evidence (`[n]`); uncited answers and questions with no relevant evidence
+return a fixed refusal without presenting model text. Root approval and the
+binding are rechecked before every search and source open; revoking the root
+stops both immediately, and a re-approved root must be bound again.
+
+To let users add files, issue a write-scoped `hik_` ingest key for the same
+workspace in the Retrieval Lab (`POST /api/ingest-keys`), set
+`CHAT_SOFTWARE_KNOWLEDGE_INGEST_KEY`, and use "Enable File Submit". Submitting
+is two steps: a preview (nothing is sent; shows destination, accepted and
+rejected files) and an explicit approval, which re-checks the root, the
+binding, the key's workspace and each file's SHA-256 before uploading.
+
+Live contract check against a real Retrieval Lab checkout (uses its own venv,
+hash embeddings and a synthetic corpus in a temp directory):
+
+```bash
+CHAT_SOFTWARE_RETRIEVAL_LAB_ROOT=/path/to/SemanticSearchPlatform python -m pytest backend/tests/test_knowledge_live.py -v
+```
 
 ## Local development
 

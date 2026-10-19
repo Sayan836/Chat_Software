@@ -23,6 +23,7 @@ class AgentDeps:
     working_path: str = "."
     chat_handler: Optional[Callable[[str], str]] = None
     file_ops_handler: Optional[Callable[[str, Optional[str], bool], tuple[str, list[Any]]]] = None
+    document_handler: Optional[Callable[[str], tuple[str, list[Any]]]] = None
 
     @classmethod
     def from_values(
@@ -36,6 +37,7 @@ class AgentDeps:
         working_path: str | Path = ".",
         chat_handler: Optional[Callable[[str], str]] = None,
         file_ops_handler: Optional[Callable[[str, Optional[str], bool], tuple[str, list[Any]]]] = None,
+        document_handler: Optional[Callable[[str], tuple[str, list[Any]]]] = None,
     ) -> "AgentDeps":
         return cls(
             chat_client=chat_client,
@@ -46,4 +48,5 @@ class AgentDeps:
             working_path=str(working_path or ".").strip() or ".",
             chat_handler=chat_handler,
             file_ops_handler=file_ops_handler,
+            document_handler=document_handler,
         )
