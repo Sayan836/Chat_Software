@@ -2,6 +2,11 @@
 
 Local-first chat and file-agent implementation.
 
+For the project overview, recommended browser startup, permissions, and current
+limitations, start with the [repository README](../README.md). This guide keeps
+additional API and development details. The Tauri/Vite frontend is an earlier
+scaffold and does not yet match the full FastAPI-served browser interface.
+
 ## What is implemented
 
 - Tauri 2 shell scaffold with a Vite frontend.
@@ -42,7 +47,7 @@ Local-first chat and file-agent implementation.
   - run read-only git status and git diff commands inside approved roots
 - Live command events appear in the UI command history and as structured
   `[runtime]` entries in the backend terminal.
-- Provider package seeded from `/Users/sayansen/Downloads/edur/utils/llm_provider.py`.
+- Provider package adapted from the original seed project's provider layer.
 - Local-first provider defaults:
   - default provider: `ollama`
   - optional providers: `openai`, `anthropic`
@@ -81,7 +86,8 @@ Local-first chat and file-agent implementation.
   starts on first use. Use "Check" to see a repo's architecture, size and disk
   needs (weights plus AirLLM's layer split) before downloading, or register a
   checkpoint folder already on disk. Then pick provider "AirLLM". The CPU
-  backend runs any standard `*ForCausalLM`; the Metal backend is limited to
+  backend accepts selected `*ForCausalLM` architectures for initial checks;
+  runtime compatibility still needs verification. The Metal backend is limited to
   Llama-family models without tied embeddings. GGUF files go to Ollama instead.
 - **Conversations.** Saved automatically, with search, rename, pin,
   archive/restore and permanent delete (also removes graph checkpoints). Chat
@@ -178,9 +184,11 @@ For Tauri:
 npm run tauri dev
 ```
 
-## Test without installing app dependencies
+## Backend tests
 
-The unit tests only use the Python standard library:
+Install the application and its test extras first (`pip install -e ".[test]"`).
+Tests use scripted providers where appropriate; optional integration cases may skip
+when their runtimes or external services are unavailable.
 
 ```bash
 npm run test:backend
