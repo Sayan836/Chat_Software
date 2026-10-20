@@ -84,10 +84,15 @@ def _hf_get(path: str, timeout: float = 20) -> Any:
         raise RuntimeError(f"Could not reach Hugging Face: {exc.reason}") from exc
 
 
-def search_gguf_models(query: str, limit: int = 20) -> list[dict[str, Any]]:
-    params = urllib.parse.urlencode(
-        {"search": query.strip()[:100], "filter": "gguf", "sort": "downloads", "limit": max(1, min(limit, 50))}
-    )
+def search_gguf_models(query: str, limit: int = 20, fmt: str = "gguf") -> list[dict[str, Any]]:
+    """Search GGUF repos (for Ollama) or transformers text-generation repos (for AirLLM)."""
+
+    base = {"search": query.strip()[:100], "sort": "downloads", "limit": max(1, min(limit, 50))}
+    if fmt == "transformers":
+        base.update({"pipeline_tag": "text-generation", "library": "transformers"})
+    else:
+        base["filter"] = "gguf"
+    params = urllib.parse.urlencode(base)
     rows = _hf_get(f"/models?{params}")
     return [
         {

@@ -84,6 +84,11 @@ def model_error_detail(settings: ProviderSettings, error: Exception) -> str:
             f"Model call failed for Claude model {settings.model!r}. "
             f"ANTHROPIC_API_KEY is {key_state}. Original error: {original}"
         )
+    if settings.provider == "airllm":
+        return (
+            f"AirLLM call failed for {settings.model!r}. Check Settings > AirLLM (runtime, worker log). "
+            f"Original error: {original}"
+        )
     return f"Model call failed for {settings.provider}/{settings.model}. Original error: {original}"
 
 
@@ -235,6 +240,12 @@ def create_app() -> object:
     models_router = models_api.build_router()
     app.state.pulls = models_router.pull_manager
     app.include_router(models_router)
+
+    from chat_software.api import airllm as airllm_api
+    from chat_software.provider.airllm import MANAGER as airllm_manager
+
+    app.state.airllm = airllm_manager
+    app.include_router(airllm_api.build_router(airllm_manager))
 
     from chat_software.api import sessions as sessions_api
 
@@ -1049,6 +1060,14 @@ def create_app() -> object:
                     "api_available": bool(secrets_store.get("ANTHROPIC_API_KEY")),
                     "base_url": secrets_store.get("ANTHROPIC_BASE_URL"),
                     "default_model": get_provider_settings(provider="anthropic").model,
+                },
+                {
+                    "provider": "airllm",
+                    "label": "AirLLM (local)",
+                    "api_available": bool([m for m in airllm_manager.list_models() if m.get("present")]),
+                    "base_url": airllm_manager.base_url,
+                    "default_model": get_provider_settings(provider="airllm").model,
+                    "models": [m["id"] for m in airllm_manager.list_models() if m.get("present")],
                 },
                 {
                     "provider": "compatible",

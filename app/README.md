@@ -66,6 +66,45 @@ Local-first chat and file-agent implementation.
 - Session checkpointing to SQLite for Phase 1 conversations.
 - A deterministic read-only agent fallback, so tests pass without network, Ollama, or cloud keys.
 
+## Assistant platform (tabs in the web console)
+
+- **Models.** Ollama models (curated list, any tag, or any Hugging Face GGUF via
+  `hf.co/<repo>:<quant>` with background download progress). Paid APIs: enter an
+  OpenAI or Anthropic key in Settings (stored in `<state>/secrets.json`, mode
+  0600, never returned by the API; `.env` still works as a fallback), then
+  "List models" to verify it. "OpenAI-compatible" covers OpenRouter, Groq,
+  Together, LM Studio and vLLM with a base URL and an optional key.
+- **AirLLM (large local models).** Full Hugging Face checkpoints (safetensors)
+  run through AirLLM, which streams one layer at a time so models larger than
+  RAM can run. It uses an isolated runtime (Settings > AirLLM > Set up runtime,
+  or point `AIRLLM_PYTHON` at an existing AirLLM venv) and a worker the app
+  starts on first use. Use "Check" to see a repo's architecture, size and disk
+  needs (weights plus AirLLM's layer split) before downloading, or register a
+  checkpoint folder already on disk. Then pick provider "AirLLM". The CPU
+  backend runs any standard `*ForCausalLM`; the Metal backend is limited to
+  Llama-family models without tied embeddings. GGUF files go to Ollama instead.
+- **Conversations.** Saved automatically, with search, rename, pin,
+  archive/restore and permanent delete (also removes graph checkpoints). Chat
+  sends recent history, so the model remembers earlier turns.
+- **Skills.** Eight built-in skills plus your own (Markdown files in
+  `<state>/skills`), created by hand or drafted by a model for review. Pick
+  skills in the chat composer; a skill's tools (web, sandbox) are enabled for
+  that turn.
+- **Sandbox.** Run Python, bash or JavaScript with no network: Docker
+  (non-root, read-only, capped) when its image is present, otherwise macOS
+  `sandbox-exec` (writes only in the workspace, `/Users` and `/Volumes`
+  unreadable). An unisolated fallback exists only with
+  `CHAT_SOFTWARE_SANDBOX_ALLOW_UNISOLATED=1` and is labelled.
+- **Deep research.** Plan → search → read → notes → cited report, with each
+  step streamed. Needs a SearXNG URL or a Brave/Tavily key (Settings), and/or a
+  bound document workspace. The source list is generated from pages actually
+  read.
+- **Agent teams.** Templates, AI-designed teams, or your own (1–8 members,
+  each with role, instructions, optional provider/model, skills and a tool
+  allowlist). "Run task": the lead delegates and integrates. "Open team chat":
+  a saved workspace where you @mention agents or let the lead moderate a
+  discussion among them, within a turn budget.
+
 ## Documents mode (Hybrid Retrieval Lab connector)
 
 Document questions use the Hybrid Retrieval Lab's scoped, read-only HTTP API;

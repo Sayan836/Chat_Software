@@ -666,6 +666,7 @@ async function loadSettings() {
     grid.replaceChildren(el("p", error.message, "note"));
   }
   refreshPulls();
+  loadAirllm();
 }
 
 async function saveSetting(name, value) {
@@ -700,17 +701,25 @@ async function searchHuggingFace() {
   if (!q) return;
   list.replaceChildren(el("li", "Searching…", "note"));
   try {
-    const data = await requestJson(`/models/hf/search?q=${encodeURIComponent(q)}`);
+    const format = document.querySelector("#hf-format").value;
+    const data = await requestJson(`/models/hf/search?q=${encodeURIComponent(q)}&format=${format}`);
     list.replaceChildren();
     data.results.forEach((repo) => {
       const item = el("li");
       const head = el("button", `${repo.repo} · ${repo.downloads || 0} downloads${repo.gated ? " · gated" : ""}`, "linklike");
       head.type = "button";
-      head.addEventListener("click", () => showQuantizations(repo.repo, item));
+      head.addEventListener("click", () => {
+        if (format === "transformers") {
+          document.querySelector("#airllm-repo").value = repo.repo;
+          checkAirllmRepo();
+        } else {
+          showQuantizations(repo.repo, item);
+        }
+      });
       item.append(head);
       list.append(item);
     });
-    if (!data.results.length) list.append(el("li", "No GGUF models found.", "note"));
+    if (!data.results.length) list.append(el("li", "No matching models found.", "note"));
   } catch (error) {
     list.replaceChildren(el("li", error.message, "note"));
   }
@@ -787,7 +796,142 @@ async function refreshPulls() {
   }
 }
 
-// ---- Wiring --------------------------------------------------------------------------------
+// ---- AirLLM --------------------------------------------------------------------------------
+let airllmPollTimer = null;
+
+function gb(bytes) {
+  return `${(bytes / 1e9).toFixed(2)} GB`;
+}
+
+async function loadAirllm() {
+  const note = document.querySelector("#airllm-status");
+  window.clearTimeout(airllmPollTimer);
+  try {
+    const data = await requestJson("/airllm/status");
+    const runtime = data.runtime || {};
+    const worker = data.worker || {};
+    const health = worker.health || {};
+    const progress = health.progress || {};
+    const busy = progress.phase && progress.phase !== "idle";
+    note.textContent =
+      `${runtime.ready ? `Runtime ready (${runtime.python}).` : `Runtime not ready: ${runtime.reason}`} ` +
+      `Worker: ${worker.running
+        ? `running, backend ${worker.backend}` +
+          (health.loaded_model ? `, loaded ${health.loaded_model}` : "") +
+          (busy ? `, ${progress.phase}${progress.generated_tokens ? ` (${progress.generated_tokens} tokens)` : ""}` : "")
+        : "stopped"}. ${data.note}`;
+    document.querySelector("#airllm-setup").hidden = Boolean(runtime.ready);
+    const list = document.querySelector("#airllm-models");
+    list.replaceChildren();
+    if (!data.models.length) list.append(el("li", "No AirLLM models yet.", "note"));
+    data.models.forEach((model) => {
+      const item = el("li");
+      item.append(el("span", `${model.id} · ${model.architecture || "?"} · ${model.context_tokens} ctx` +
+        `${model.present ? "" : " · files missing"}${model.repository ? ` · ${model.repository}` : ""} `));
+      const remove = el("button", "Remove", "secondary mini");
+      remove.type = "button";
+      remove.addEventListener("click", async () => {
+        if (!window.confirm(`Remove ${model.id} from AirLLM?`)) return;
+        const deleteFiles = window.confirm("Also delete its files? (Only files inside the AirLLM folder are ever deleted.)");
+        try {
+          await requestJson(`/airllm/models/${encodeURIComponent(model.id)}?delete_files=${deleteFiles}`, { method: "DELETE" });
+        } catch (error) {
+          appendMessage("system", error.message);
+        }
+        loadAirllm();
+      });
+      item.append(remove);
+      list.append(item);
+    });
+    const downloads = document.querySelector("#airllm-downloads");
+    downloads.replaceChildren();
+    let active = false;
+    data.downloads.forEach((job) => {
+      active = active || job.status === "running" || job.status === "queued";
+      const item = el("li", `${job.repo} → ${job.model_id}: ${job.status}` +
+        `${job.percent !== null ? ` ${job.percent}%` : ""}${job.error ? ` — ${job.error}` : ""}`);
+      if (job.percent !== null) {
+        const bar = el("progress");
+        bar.max = 100;
+        bar.value = job.percent;
+        item.append(bar);
+      }
+      downloads.append(item);
+    });
+    if (active || busy) airllmPollTimer = window.setTimeout(loadAirllm, 2000);
+  } catch (error) {
+    note.textContent = error.message;
+  }
+}
+
+async function airllmAction(path, label, confirmText) {
+  if (confirmText && !window.confirm(confirmText)) return;
+  const note = document.querySelector("#airllm-status");
+  note.textContent = `${label}…`;
+  try {
+    const result = await requestJson(path, { method: "POST" });
+    if (result.output) appendMessage("system", result.output.slice(-1500));
+  } catch (error) {
+    appendMessage("system", error.message);
+  }
+  await loadAirllm();
+  if (typeof loadProviders === "function") loadProviders();
+}
+
+async function checkAirllmRepo() {
+  const repo = document.querySelector("#airllm-repo").value.trim();
+  const box = document.querySelector("#airllm-check-result");
+  if (!repo) return;
+  box.replaceChildren(el("span", "Checking…"));
+  try {
+    const info = await requestJson(`/airllm/models/check?repo=${encodeURIComponent(repo)}`);
+    box.replaceChildren(el("span", `${info.support}. Weights ${gb(info.weights_bytes)}; needs about ` +
+      `${gb(info.disk_needed_bytes)} of disk (weights + AirLLM layer split); ${gb(info.free_bytes)} free.` +
+      `${info.gated ? " Gated: needs an HF token and an accepted licence." : ""} `));
+    if (info.supported) {
+      const button = el("button", `Download as ${info.suggested_id}`, "secondary mini");
+      button.type = "button";
+      button.addEventListener("click", async () => {
+        if (!window.confirm(`Download ${repo} (${gb(info.weights_bytes)}) for AirLLM?`)) return;
+        try {
+          await requestJson("/airllm/models/download", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ repo, model_id: info.suggested_id, context_tokens: Math.min(info.context_tokens, 8192) })
+          });
+        } catch (error) {
+          appendMessage("system", error.message);
+        }
+        loadAirllm();
+      });
+      box.append(button);
+    }
+  } catch (error) {
+    box.replaceChildren(el("span", error.message));
+  }
+}
+
+async function registerAirllmModel() {
+  const path = document.querySelector("#airllm-path").value.trim();
+  const id = document.querySelector("#airllm-id").value.trim();
+  if (!path || !id) {
+    appendMessage("system", "Enter the checkpoint folder and a model id.");
+    return;
+  }
+  try {
+    await requestJson("/airllm/models/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path, model_id: id })
+    });
+  } catch (error) {
+    appendMessage("system", error.message);
+  }
+  await loadAirllm();
+  if (typeof loadProviders === "function") loadProviders();
+}
+
+// ---- Wiring--------------------------------------------------------------------------------
 document.querySelectorAll(".tab").forEach((tab) => tab.addEventListener("click", () => showView(tab.dataset.view)));
 document.querySelector("#session-search").addEventListener("input", () => {
   window.clearTimeout(loadConversations.timer);
@@ -813,6 +957,14 @@ document.querySelector("#sandbox-run").addEventListener("click", runSandbox);
 document.querySelector("#sandbox-pull").addEventListener("click", pullSandboxImage);
 document.querySelector("#verify-run").addEventListener("click", verifyProvider);
 document.querySelector("#hf-search").addEventListener("click", searchHuggingFace);
+document.querySelector("#airllm-setup").addEventListener("click", () => airllmAction(
+  "/airllm/runtime/setup", "Setting up the AirLLM runtime (this can take 10+ minutes)",
+  "Set up the AirLLM runtime now? It clones AirLLM and installs PyTorch and Transformers (about 1–2 GB)."));
+document.querySelector("#airllm-start").addEventListener("click", () => airllmAction("/airllm/worker/start", "Starting worker"));
+document.querySelector("#airllm-stop").addEventListener("click", () => airllmAction("/airllm/worker/stop", "Stopping worker"));
+document.querySelector("#airllm-cancel").addEventListener("click", () => airllmAction("/airllm/worker/cancel", "Cancelling"));
+document.querySelector("#airllm-check").addEventListener("click", checkAirllmRepo);
+document.querySelector("#airllm-register").addEventListener("click", registerAirllmModel);
 chatForm.addEventListener("submit", () => window.setTimeout(loadConversations, 1500));
 
 loadSkillOptions();

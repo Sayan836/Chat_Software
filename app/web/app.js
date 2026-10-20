@@ -989,19 +989,37 @@ function updateProviderNote() {
     return;
   }
 
+  if (selected === "airllm") {
+    const count = (info.models || []).length;
+    providerNote.textContent = count
+      ? `AirLLM: ${count} local checkpoint(s). The worker starts on first use; large models are slow.`
+      : "AirLLM has no models yet. Add one in Settings > AirLLM.";
+    return;
+  }
+
+  if (selected === "compatible") {
+    providerNote.textContent = info.api_available
+      ? `OpenAI-compatible endpoint: ${info.base_url}.`
+      : "Set the OpenAI-compatible base URL in Settings first.";
+    return;
+  }
+
   providerNote.textContent = info.api_available
-    ? `${info.label} API key detected in environment.`
-    : `${info.label} API key not detected; chat calls will fail until configured.`;
+    ? `${info.label} API key configured.`
+    : `${info.label} API key not set; add it in Settings before chatting.`;
 }
 
-function suggestedModelsFor(provider, registeredModels, ollamaModels, catalog) {
+function suggestedModelsFor(provider, registeredModels, ollamaModels, catalog, providers = []) {
   if (provider === "ollama") {
     const installed = ollamaModels.map(ollamaModelName).filter(Boolean);
     return [...new Set(installed)];
   }
-  return registeredModels
-    .filter((item) => item.provider === provider)
-    .map((item) => item.model);
+  const info = providers.find((item) => item.provider === provider) || {};
+  return [...new Set([
+    ...(info.models || []),
+    ...registeredModels.filter((item) => item.provider === provider).map((item) => item.model),
+    info.default_model
+  ].filter(Boolean))];
 }
 
 function ollamaModelName(model) {
@@ -1014,7 +1032,8 @@ function applyModelSuggestions(data, ollamaModels = []) {
     provider,
     data.registered_models || [],
     ollamaModels,
-    data.ollama_catalog || []
+    data.ollama_catalog || [],
+    data.providers || []
   );
   const storedModel = localStorage.getItem("chatSoftwareModel") || "";
   const activeModel = data.active?.provider === provider ? data.active?.model || "" : "";

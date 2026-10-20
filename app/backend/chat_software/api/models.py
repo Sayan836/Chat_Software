@@ -61,11 +61,13 @@ def build_router(pulls: Optional[PullManager] = None) -> APIRouter:
         return {"provider": provider, "verified": True, "models": models}
 
     @router.get("/models/hf/search")
-    def hf_search(q: str, limit: int = 20) -> dict[str, object]:
+    def hf_search(q: str, limit: int = 20, format: str = "gguf") -> dict[str, object]:
         if not q.strip():
             raise HTTPException(status_code=400, detail="Enter a search term.")
+        if format not in {"gguf", "transformers"}:
+            raise HTTPException(status_code=400, detail="format must be gguf or transformers")
         try:
-            return {"query": q, "results": search_gguf_models(q, limit)}
+            return {"query": q, "format": format, "results": search_gguf_models(q, limit, format)}
         except RuntimeError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 

@@ -18,12 +18,13 @@ from pathlib import Path
 from typing import Optional
 
 
-SUPPORTED_PROVIDERS = {"ollama", "openai", "anthropic", "compatible"}
+SUPPORTED_PROVIDERS = {"ollama", "openai", "anthropic", "compatible", "airllm"}
 PROVIDER_LABELS = {
     "ollama": "Ollama (local)",
     "openai": "OpenAI (ChatGPT)",
     "anthropic": "Anthropic (Claude)",
     "compatible": "OpenAI-compatible endpoint",
+    "airllm": "AirLLM (local HF checkpoints, layer streaming)",
 }
 DEFAULT_PROVIDER = "ollama"
 
@@ -162,6 +163,11 @@ def resolve_model(
         from chat_software import secrets_store
 
         return secrets_store.get("COMPATIBLE_MODEL") or os.getenv("LLM_MODEL") or ""
+    if active_provider == "airllm":
+        from chat_software.provider.airllm import MANAGER
+
+        present = [m["id"] for m in MANAGER.list_models() if m.get("present")]
+        return present[0] if present else ""
     return os.getenv("OPENAI_MODEL") or os.getenv("LLM_MODEL") or "gpt-4o-mini"
 
 
@@ -175,7 +181,7 @@ def get_model_capability(provider: str, model: str) -> ModelCapability:
         supports_tools=provider in {"openai", "anthropic", "ollama"},
         tool_reliability="unknown",
         context_window=8192,
-        is_local=provider == "ollama",
+        is_local=provider in {"ollama", "airllm"},
         notes="Unregistered model; validate before granting autonomy.",
     )
 
@@ -237,6 +243,17 @@ def get_provider_settings(
             model=model,
             api_key=api_key or secrets_store.get("ANTHROPIC_API_KEY"),
             base_url=base_url or secrets_store.get("ANTHROPIC_BASE_URL"),
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+    if active_provider == "airllm":
+        from chat_software.provider.airllm import MANAGER
+
+        return ProviderSettings(
+            provider=active_provider,
+            model=model,
+            api_key=None,
+            base_url=MANAGER.base_url,
             temperature=temperature,
             max_tokens=max_tokens,
         )

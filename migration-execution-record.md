@@ -113,6 +113,63 @@ the in-memory BM25 index hold the whole document. Truly bounded ingestion would 
 extraction straight into indexing and an incremental BM25 store. Process RSS and native Chroma memory were
 not measured.
 
+## Assistant platform features (19 October 2026, after M3)
+
+Requested by the user: model install from the internet and paid API keys; saved/archived/deleted
+sessions; built-in and user-created skills; deep research with visible steps; agent teams and a
+team workspace chat where agents discuss; sandbox testing. **Scope change:** the migration map had
+deferred an agent-team factory; the user explicitly asked for it, so teams are built with bounded
+permissions (sandbox-only execution, explicit tool allowlists, turn and tool-step budgets).
+
+| Area | Where | Notes |
+| --- | --- | --- |
+| Keys, compatible endpoints, live model lists, HF GGUF search, background pulls | `secrets_store.py`, `provider/catalog.py`, `api/models.py` | Keys are never echoed; errors report status, not keys. Pulling a model is a confirmed user action. |
+| Sessions lifecycle, chat memory | `agent/session_store.py` (in-place migration), `api/sessions.py`, `read_only_agent.py` | Previously chat sent only the latest message. |
+| Skills | `skills/`, `skills/builtin/*.md`, `api/skills.py` | Built-ins read-only; AI drafts are returned unsaved. |
+| Shared tool loop | `agent/toolbox.py` | JSON action protocol (works without native tool calling); untrusted-result framing; step budget. |
+| Sandbox | `sandbox/`, `api/sandbox.py` | Seatbelt profile verified: network, `~`, `/Volumes`, `.env` reads and outside writes blocked; timeout kills. Docker path needs the image pulled (not done: user download). |
+| Web search and fetch | `research/web.py` | SearXNG/Brave/Tavily only; SSRF guard on every hop. |
+| Deep research | `research/engine.py`, `api/research.py` | Engine-built source list; invalid citations removed. |
+| Agent teams | `teams/`, `api/teams.py` | Task mode and moderated discussion; live event streaming per member. |
+| UI | `web/index.html`, `web/platform.js`, `web/styles.css` | Tabs: Chat · Research · Teams · Skills · Sandbox · Settings; conversations sidebar. |
+
+Validation: **171 passed, 1 skipped** with the live Retrieval Lab (40 new platform tests; scripted
+models). Browser run with local Ollama `qwen3:8b`: chat remembered an earlier turn; with the code
+tool on, the model ran `run_code` in the seatbelt sandbox and answered 333,833,500 (a stray "[n]"
+citation exposed a prompt issue, then fixed); a Software-team chat ran moderator → lead → Engineer
+(wrote and ran tests in the sandbox) → lead wrap-up in about 9 minutes; sandbox, skills, settings
+and HF search views worked.
+
+Not verified: web research against a live search provider (none configured), OpenAI/Anthropic
+key verification against the real APIs (no keys), an actual Hugging Face model download, the
+Docker sandbox path (image not pulled), and team task mode with a real model (scripted only).
+Local 8B models with thinking are slow for multi-agent work; smaller or non-thinking models, or a
+paid API for the lead, make teams far faster.
+
+## M5 — AirLLM provider for Hugging Face checkpoints (19 October 2026)
+
+Requested by the user once the core document workflow worked. AirLLM runs **transformers
+checkpoints**, not GGUF, so Hugging Face models now have two routes: GGUF → Ollama, checkpoint →
+AirLLM. The Lab's staged service was rewritten for Chat_Software, not moved; weights, venv and
+upstream clone stay outside Git.
+
+| Work | Where |
+| --- | --- |
+| Isolated worker: OpenAI-compatible `/v1/chat/completions`, one resident model, serialized generation, cancel, time limit, offline hub, engine/backend reported per reply; tolerant of extra OpenAI fields; up to 80 messages (chat history). Metal uses a separate `.npz` shard folder and refuses unsupported models with a clear reason. | `app/integrations/airllm/worker.py` |
+| Pinned upstream (`fd3bd7e`), macOS CPU patch, requirements, user-initiated runtime setup. | `app/integrations/airllm/{upstream.json,patches/,requirements.txt,setup_runtime.py}` |
+| Manager: runtime discovery (`AIRLLM_PYTHON`/`AIRLLM_HOME`/`AIRLLM_BACKEND` settings), catalog, HF checks (architecture, safetensors size, 2× disk need, gating), background downloads with progress, register existing folder, remove (deletes files only inside the managed folder), worker start/stop/cancel with provider keys stripped from its environment. | `chat_software/provider/airllm.py`, `api/airllm.py` |
+| `airllm` provider through the existing provider layer, so chat, skills, research and teams can all use it. | `provider/config.py`, `provider/factory.py`, `server.py` |
+| Settings > AirLLM card; HF search can switch between GGUF → Ollama and Transformers → AirLLM; the model picker lists AirLLM checkpoints. | `web/*` |
+
+Validation: **7 new tests** (catalog, HF checks/downloads, worker contract, provider routing); full
+suite 172 passed / 7 skipped offline. Real runs reusing the existing runtime and checkpoints (no
+downloads): SmolLM2-135M answered in 4.5 s cold and 0.4 s warm, and a follow-up used conversation
+history; SmolLM2-1.7B on CPU took 22.9 s cold and 3.5 s warm; the browser chat via provider AirLLM
+worked; the worker stopped with the app. Metal: AirLLM's MLX path cannot run tied-embedding models
+(SmolLM2 has no `lm_head` shard); the worker now refuses those with a clear message, and the MLX
+shards created by this test were deleted. Not verified: a fresh `setup_runtime.py`, a real HF
+checkpoint download, a model larger than RAM, CUDA, and Metal with a compatible Llama checkpoint.
+
 ## Not done / open items
 
 - **M2 native shell:** `app/frontend/src/main.ts` (Tauri scaffold) has neither the Documents panel nor

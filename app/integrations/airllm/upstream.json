@@ -1,0 +1,6 @@
+{
+  "repository": "https://github.com/lyogavin/airllm.git",
+  "commit": "fd3bd7ef404f55961555f3f63651b5f9e33cf8bc",
+  "checkout": "source",
+  "package_directory": "air_llm"
+}

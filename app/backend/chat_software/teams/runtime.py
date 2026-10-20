@@ -14,7 +14,9 @@ who is speaking and what tools they used.
 from __future__ import annotations
 
 import json
+import queue
 import re
+import threading
 from dataclasses import dataclass
 from typing import Any, Callable, Iterator, Optional
 
@@ -36,18 +38,6 @@ class TeamDeps:
     knowledge: Any = None
     default_provider: Optional[str] = None
     default_model: Optional[str] = None
-
-
-class _EventBuffer:
-    def __init__(self) -> None:
-        self.items: list[dict[str, Any]] = []
-
-    def __call__(self, event: dict[str, Any]) -> None:
-        self.items.append(event)
-
-    def drain(self) -> list[dict[str, Any]]:
-        items, self.items = self.items, []
-        return items
 
 
 def member_system_prompt(team: Team, member: Member, deps: TeamDeps, *, is_lead: bool) -> str:
@@ -85,12 +75,16 @@ def run_member(
     *,
     sandbox_workspace_id: Optional[str] = None,
 ) -> Iterator[dict[str, Any]]:
-    """Run one member turn; yields tool events then ``agent_message`` with the reply."""
+    """Run one member turn; yields tool events live, then ``agent_message`` with the reply.
 
-    buffer = _EventBuffer()
+    The tool loop runs in a worker thread and reports through a queue, so a long turn (several
+    model calls and sandbox runs) streams its progress instead of appearing frozen.
+    """
+
+    events: "queue.Queue[tuple[str, Any]]" = queue.Queue()
     ctx = ToolContext(sandbox=deps.sandbox, knowledge=deps.knowledge, documents_root_id=team.documents_root_id,
-                      sandbox_workspace_id=sandbox_workspace_id, web_enabled=True, on_event=buffer,
-                      actor=member.name)
+                      sandbox_workspace_id=sandbox_workspace_id, web_enabled=True,
+                      on_event=lambda event: events.put(("event", event)), actor=member.name)
     tools = available_tools(member.tools, ctx) if team.max_tool_steps else []
     client = _client(deps, member)
     yield {"type": "agent_started", "member_id": member.id, "agent": member.name, "role": member.role,
@@ -100,8 +94,25 @@ def run_member(
         {"role": "system", "content": member_system_prompt(team, member, deps, is_lead=member.id == team.lead)},
         {"role": "user", "content": prompt},
     ]
-    result = run_tool_loop(client, messages, tools, ctx, max_steps=team.max_tool_steps)
-    yield from buffer.drain()
+
+    def work() -> None:
+        try:
+            events.put(("result", run_tool_loop(client, messages, tools, ctx, max_steps=team.max_tool_steps)))
+        except BaseException as exc:  # surfaced to the caller below
+            events.put(("error", exc))
+
+    worker = threading.Thread(target=work, name=f"team-{member.id}", daemon=True)
+    worker.start()
+    while True:
+        kind, payload = events.get()
+        if kind == "event":
+            yield payload
+        elif kind == "error":
+            raise payload
+        else:
+            result = payload
+            break
+    worker.join()
     yield {"type": "agent_message", "member_id": member.id, "agent": member.name, "content": result.text,
            "tool_steps": [{"tool": s["tool"], "status": s["status"]} for s in result.steps],
            "sources": list(ctx.sources), "provider": client.settings.provider, "model": client.settings.model}

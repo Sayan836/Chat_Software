@@ -131,6 +131,12 @@ def get_chat_client(
         return EchoChatClient(settings=settings)
     if settings.provider == "anthropic":
         return AnthropicChatClient(settings=settings)
+    if settings.provider == "airllm":
+        from .airllm import MANAGER, AirLLMChatClient
+
+        if not settings.model:
+            raise ValueError("No AirLLM model yet: download or register one in Settings > AirLLM.")
+        return AirLLMChatClient(settings=settings, manager=MANAGER)
     if settings.provider == "compatible" and not settings.base_url:
         raise ValueError("Set COMPATIBLE_BASE_URL (Settings > Providers) to use the compatible provider.")
     return OpenAICompatibleChatClient(settings=settings)

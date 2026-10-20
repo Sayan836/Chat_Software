@@ -33,6 +33,9 @@ SETTING_NAMES = {
     "COMPATIBLE_MODEL": "Default model for the OpenAI-compatible endpoint",
     "SEARXNG_URL": "SearXNG instance URL (deep research)",
     "RESEARCH_SEARCH_PROVIDER": "Web search provider for deep research",
+    "AIRLLM_PYTHON": "AirLLM runtime Python (isolated venv)",
+    "AIRLLM_HOME": "AirLLM folder for models and logs",
+    "AIRLLM_BACKEND": "AirLLM backend: cpu, metal or cuda",
 }
 _URL_SETTINGS = {"OPENAI_BASE_URL", "ANTHROPIC_BASE_URL", "COMPATIBLE_BASE_URL", "SEARXNG_URL"}
 _LOCK = threading.Lock()

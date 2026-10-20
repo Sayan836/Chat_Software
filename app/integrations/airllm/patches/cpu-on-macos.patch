@@ -1,0 +1,74 @@
+diff --git a/air_llm/airllm/__init__.py b/air_llm/airllm/__init__.py
+index f2eef16..37442fa 100644
+--- a/air_llm/airllm/__init__.py
++++ b/air_llm/airllm/__init__.py
+@@ -1,8 +1,9 @@
++import os
+ from sys import platform
+ 
+ is_on_mac_os = False
+ 
+-if platform == "darwin":
++if platform == "darwin" and os.environ.get("AIRLLM_BACKEND") != "cpu":
+     is_on_mac_os = True
+ 
+ if is_on_mac_os:
+diff --git a/air_llm/airllm/auto_model.py b/air_llm/airllm/auto_model.py
+index f6608df..1bd6274 100644
+--- a/air_llm/airllm/auto_model.py
++++ b/air_llm/airllm/auto_model.py
+@@ -1,10 +1,11 @@
++import os
+ import importlib
+ from transformers import AutoConfig
+ from sys import platform
+ 
+ is_on_mac_os = False
+ 
+-if platform == "darwin":
++if platform == "darwin" and os.environ.get("AIRLLM_BACKEND") != "cpu":
+     is_on_mac_os = True
+ 
+ if is_on_mac_os:
+diff --git a/air_llm/airllm/persist/model_persister.py b/air_llm/airllm/persist/model_persister.py
+index 963a6f6..8855ee6 100644
+--- a/air_llm/airllm/persist/model_persister.py
++++ b/air_llm/airllm/persist/model_persister.py
+@@ -1,3 +1,4 @@
++import os
+ 
+ 
+ 
+@@ -17,7 +18,7 @@ class ModelPersister:
+         from sys import platform
+         is_on_mac_os = False
+ 
+-        if platform == "darwin":
++        if platform == "darwin" and os.environ.get("AIRLLM_BACKEND") != "cpu":
+             is_on_mac_os = True
+ 
+ 
+diff --git a/air_llm/airllm/utils.py b/air_llm/airllm/utils.py
+index 75740db..73d089f 100644
+--- a/air_llm/airllm/utils.py
++++ b/air_llm/airllm/utils.py
+@@ -16,7 +16,7 @@ from sys import platform
+ 
+ is_on_mac_os = False
+ 
+-if platform == "darwin":
++if platform == "darwin" and os.environ.get("AIRLLM_BACKEND") != "cpu":
+     is_on_mac_os = True
+ 
+ 
+@@ -76,6 +76,10 @@ class NotEnoughSpaceException(Exception):
+ 
+ # Function to clean RAM & vRAM
+ def clean_memory():
++    # CPU tensors are released by reference counting when streamed modules return to meta.
++    # Full cyclic GC per layer dominates small personal CPU runs; collect on model unload.
++    if os.environ.get("AIRLLM_BACKEND") == "cpu":
++        return
+     gc.collect()
+     try:
+         ctypes.CDLL("libc.so.6").malloc_trim(0)
