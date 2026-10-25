@@ -30,7 +30,8 @@ class SecretsStoreTests(unittest.TestCase):
     def test_keys_are_owner_only_and_never_described(self) -> None:
         secrets_store.set_value("OPENAI_API_KEY", "sk-test-secret-value")
         path = Path(self._tmp.name) / "secrets.json"
-        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+        if os.name != "nt":  # Windows has no POSIX owner-only mode bits; stat reports 0o666
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
         described = secrets_store.describe()
         self.assertTrue(described["OPENAI_API_KEY"]["set"])
         self.assertEqual(described["OPENAI_API_KEY"]["source"], "app")
